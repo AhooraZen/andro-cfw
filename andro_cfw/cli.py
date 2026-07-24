@@ -183,6 +183,146 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
 
+FRAMEWORK_SNIPPETS = {
+    "telebot": """import telebot
+from andro_cfw import CFWSession
+
+# Load your deployed worker proxy session
+session = CFWSession.load()
+
+# Configure telebot to route requests through andro-cfw proxy
+telebot.apihelper.API_URL = session.telebot_api_url()
+telebot.apihelper.FILE_URL = session.telebot_file_url()
+
+bot = telebot.TeleBot("YOUR_BOT_TOKEN")
+
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+    bot.reply_to(message, "Hello! This bot is running through andro-cfw proxy! 🚀")
+
+if __name__ == "__main__":
+    print("Bot is starting via andro-cfw proxy...")
+    bot.infinity_polling()
+""",
+    "ptb": """from telegram.ext import ApplicationBuilder, CommandHandler
+from andro_cfw import CFWSession
+
+# Load your deployed worker proxy session
+session = CFWSession.load()
+
+app = (
+    ApplicationBuilder()
+    .token("YOUR_BOT_TOKEN")
+    .base_url(session.ptb_base_url())
+    .base_file_url(session.ptb_base_file_url())
+    .build()
+)
+
+async def start(update, context):
+    await update.message.reply_text("Hello! This bot is running through andro-cfw proxy! 🚀")
+
+app.add_handler(CommandHandler("start", start))
+
+if __name__ == "__main__":
+    print("Bot is starting via andro-cfw proxy...")
+    app.run_polling()
+""",
+    "aiogram": """import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import CommandStart
+from aiogram.client.telegram import TelegramAPIServer
+from aiogram.client.session.aiohttp import AiohttpSession
+from andro_cfw import CFWSession
+
+# Load your deployed worker proxy session
+session = CFWSession.load()
+
+api_server = TelegramAPIServer(**session.aiogram_server_url())
+bot = Bot(
+    token="YOUR_BOT_TOKEN",
+    session=AiohttpSession(api=api_server),
+)
+dp = Dispatcher()
+
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    await message.answer("Hello! This bot is running through andro-cfw proxy! 🚀")
+
+async def main():
+    print("Bot is starting via andro-cfw proxy...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+""",
+    "pyrogram": """from pyrogram import Client, filters
+from andro_cfw import CFWSession
+
+# Load your deployed worker proxy session
+session = CFWSession.load()
+
+app = Client(
+    "andro_bot",
+    bot_token="YOUR_BOT_TOKEN",
+    api_id=12345,          # Replace with your Telegram API ID
+    api_hash="YOUR_API_HASH", # Replace with your Telegram API Hash
+)
+
+# Set Pyrogram HTTP base URL override
+app.api_url = session.api_base_url()
+
+@app.on_message(filters.command("start"))
+async def start_cmd(client, message):
+    await message.reply_text("Hello! Pyrogram is running through andro-cfw proxy! 🚀")
+
+if __name__ == "__main__":
+    print("Pyrogram bot starting via andro-cfw proxy...")
+    app.run()
+""",
+    "hydrogram": """from hydrogram import Client, filters
+from andro_cfw import CFWSession
+
+# Load your deployed worker proxy session
+session = CFWSession.load()
+
+app = Client(
+    "andro_bot",
+    bot_token="YOUR_BOT_TOKEN",
+    api_id=12345,          # Replace with your Telegram API ID
+    api_hash="YOUR_API_HASH", # Replace with your Telegram API Hash
+)
+
+# Set Hydrogram HTTP base URL override
+app.api_url = session.api_base_url()
+
+@app.on_message(filters.command("start"))
+async def start_cmd(client, message):
+    await message.reply_text("Hello! Hydrogram is running through andro-cfw proxy! 🚀")
+
+if __name__ == "__main__":
+    print("Hydrogram bot starting via andro-cfw proxy...")
+    app.run()
+""",
+}
+
+
+def cmd_snippet(args: argparse.Namespace) -> int:
+    fw = args.framework.lower()
+    if fw not in FRAMEWORK_SNIPPETS:
+        log_error(f"Unknown framework '{fw}'. Choose from: {', '.join(FRAMEWORK_SNIPPETS.keys())}")
+        return 1
+
+    code = FRAMEWORK_SNIPPETS[fw]
+    if args.out:
+        out_path = Path(args.out)
+        out_path.write_text(code, encoding="utf-8")
+        log_success(f"Generated {fw} starter bot snippet to '{out_path}'")
+    else:
+        print(f"\n--- Starter code for {COLOR_CYAN}{fw}{COLOR_RESET} ---")
+        print(code)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="andro-cfw", description="Run Telegram bots through your own Cloudflare Worker proxy.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -212,6 +352,11 @@ def main(argv=None) -> int:
     p_check.add_argument("--path", help="Project directory (default: current directory)")
     p_check.add_argument("--timeout", type=int, default=5, help="HTTP connection timeout in seconds (default: 5)")
     p_check.set_defaults(func=cmd_check)
+
+    p_snippet = sub.add_parser("snippet", help="Generate ready-to-run Python code for telebot, ptb, aiogram, pyrogram, or hydrogram.")
+    p_snippet.add_argument("--framework", "-f", default="telebot", choices=["telebot", "ptb", "aiogram", "pyrogram", "hydrogram"], help="Framework name (default: telebot)")
+    p_snippet.add_argument("--out", "-o", help="Optional output file path to write code to (e.g. bot.py)")
+    p_snippet.set_defaults(func=cmd_snippet)
 
     p_remove = sub.add_parser("remove", help="Delete the deployed worker(s) and local session.")
     p_remove.add_argument("--path", help="Project directory (default: current directory)")

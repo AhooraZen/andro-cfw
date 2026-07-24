@@ -10,6 +10,7 @@ from andro_cfw.cli import (
     cmd_add_account,
     cmd_status,
     cmd_check,
+    cmd_snippet,
     cmd_remove,
     main,
 )
@@ -170,6 +171,15 @@ def test_cmd_check(tmp_path):
          patch.object(session, "check_health", return_value=health_mock):
         ret = cmd_check(args)
         assert ret == 0
+
+
+def test_cmd_snippet(tmp_path):
+    out_file = tmp_path / "bot.py"
+    args = argparse.Namespace(framework="telebot", out=str(out_file))
+    ret = cmd_snippet(args)
+    assert ret == 0
+    assert out_file.exists()
+    assert "telebot" in out_file.read_text()
 
 
 def test_main_cli():
