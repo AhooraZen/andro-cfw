@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "andro-cfw"
+version = "0.1.0"
+description = "Run Telegram bots from filtered/restricted regions via your own Cloudflare Worker proxy (no VPN required)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "andro-cfw contributors" }]
+keywords = ["telegram", "telegram-bot", "cloudflare", "cloudflare-workers", "proxy", "iran", "filter-bypass"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Communications :: Chat",
+    "Topic :: Internet :: Proxy Servers",
+    "Intended Audience :: Developers",
+]
+dependencies = [
+    "cryptography>=41.0",
+]
+
+[project.optional-dependencies]
+telebot = ["pyTelegramBotAPI>=4.14"]
+ptb = ["python-telegram-bot>=20.0"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+andro-cfw = "andro_cfw.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["andro_cfw*"]
+
+[tool.setuptools.package-data]
+"andro_cfw.templates" = ["*.ts", "*.tmpl"]
