@@ -27,8 +27,9 @@
 
 - **بدون VPN** — نه روی سیستم توسعه، نه روی سرور
 - **ورکر مال خودته** — روی اکانت Cloudflare خودت deploy میشه، کنترل کامل داری
-- احراز هویت امن — با OAuth رسمی Cloudflare (wrangler login)، رمز عبور شما هرگز به این کتابخانه ارسال یا در اختیار آن قرار نمی‌گیرد
+- **احراز هویت امن** — با OAuth رسمی Cloudflare (wrangler login)، رمز عبور شما هرگز به این کتابخانه ارسال یا در اختیار آن قرار نمی‌گیرد
 - **سشن رمزنگاری‌شده** — فایل `cfw.session` با Fernet (AES-128 + HMAC) رمز میشه، کلید جدا توی `~/.andro_cfw/key`
+- **لود بالانس هوشمند چنداکانته** — امکان تعریف چند اکانت کلادفلر (`--accounts N`) برای سوئیچ خودکار هنگام اتمام سقف ۱۰۰ هزار درخواست روزانه
 - **پشتیبانی چند لایبری** — telebot، python-telegram-bot، aiogram
 - **بدون monkey-patch** — فقط URL رو جایگزین می‌کنی، بقیه کد ع باقی می‌مونه
 
@@ -42,7 +43,7 @@ source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install andro-cfw
 ```
 
-**پیش‌نیاز:** [Node.js](https://nodejs.org) — فقط موقع `andro-cfw init` لازمه (برای اجرای `wrangler` CLI). بعدش تو سرور فقط پایتون کافیه.
+**پیش‌نیاز:** [Node.js](https://nodejs.org) — فقط موقع `andro-cfw init` لازمه (برای اجرای `wrangler` CLI). اگر نصب نباشه، andro-cfw خودش پکیج مَنِجِر سیستمت رو (`pacman`, `apt`, `dnf`, `brew`, `winget`) پیدا می‌کنه و نصبش می‌کنه. بعدش تو سرور فقط پایتون کافیه.
 
 ---
 
@@ -54,9 +55,15 @@ andro-cfw init
 ```
 
 این دستور:
-1. مرورگرت رو باز می‌کنه → توی Cloudflare لاگین می‌کنی (OAuth)
-2. یه Worker خودکار می‌سازه و deploy می‌کنه
-3. فایل `cfw.session` رو رمزنگاری‌شده توی همون مسیر می‌سازه
+1. تول‌چین و محیط Node.js و Wrangler رو بررسی می‌کنه.
+2. مرورگرت رو باز می‌کنه → توی Cloudflare لاگین می‌کنی (OAuth).
+3. یه Worker خودکار می‌سازه و deploy می‌کنه.
+4. فایل `cfw.session` رو رمزنگاری‌شده توی همون مسیر می‌سازه.
+
+برای اضافه کردن ایمن مسیر اجرا به PATH سیستم:
+```bash
+andro-cfw setup-path
+```
 
 ---
 
@@ -128,7 +135,10 @@ bot = Bot(
 | `andro-cfw init` | لاگین کلادفلر + deploy ورکر + ساخت سشن |
 | `andro-cfw init --name foo` | deploy با اسم دلخواه |
 | `andro-cfw init --force` | redeploy و بازنویسی سشن قبلی |
+| `andro-cfw init --accounts 2` | ساخت سشن چنداکانته لودبالانس‌شده |
+| `andro-cfw add-account` | افزودن ورکر اکانت جدید به سشن |
 | `andro-cfw status` | نمایش اطلاعات ورکر ذخیره‌شده |
+| `andro-cfw setup-path` | افزودن ایمن مسیر اجرا به PATH کاربر |
 | `andro-cfw remove` | حذف ورکر + حذف `cfw.session` |
 
 ---
@@ -139,6 +149,7 @@ bot = Bot(
 - **گیت:** اگه اشتباهاً `cfw.session` رو commit کنی، بدون کلید قابل خوندن نیست. ولی **حتماً `cfw.session` رو به `.gitignore` اضافه کن**.
 - **ورکر pass-through خالصه** — لاگ نمی‌گیره، توکن ذخیره نمی‌کنه، محتوای ریکوئست رو نمی‌بینه.
 - پسورد کلادفلر هرگز به این کتابخانه نمی‌رسه — همه‌چیز از طریق OAuth رسمی Cloudflare انجام می‌شه.
+
 ---
 
 ## 📋 نیازمندی‌ها
@@ -148,8 +159,6 @@ bot = Bot(
 - [اکانت رایگان Cloudflare](https://dash.cloudflare.com/sign-up)
 
 ---
-
-
 
 ## 📄 لایسنس
 
