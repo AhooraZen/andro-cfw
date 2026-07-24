@@ -1,4 +1,7 @@
 cfw.session
+.andro_cfw/
+.wrangler/
+*.key
 .venv/
 __pycache__/
 *.egg-info/
@@ -6,4 +9,3 @@ dist/
 build/
 .coverage
 .pytest_cache/
-<MagicMock*
