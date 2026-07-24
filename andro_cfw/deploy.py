@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from .auth import _account_env
+from .colors import log_working, log_success, log_error
 from .errors import DeploymentError
 from .toolchain import check_node_toolchain
 
@@ -30,10 +31,6 @@ def deploy_worker(
     """
     Build a minimal Cloudflare Worker project in a temp directory and
     deploy it with `wrangler deploy`. Returns (worker_name, worker_url).
-
-    Requires the user to already be authenticated (see auth.cloudflare_login)
-    -- for the given `account_label` when deploying under a specific
-    isolated Cloudflare account (multi-account load-balancing mode).
     """
     check_node_toolchain()
 
@@ -51,7 +48,7 @@ def deploy_worker(
         )
 
         label_note = f" (account: {account_label})" if account_label else ""
-        print(f"[andro-cfw] Deploying Cloudflare Worker '{worker_name}'{label_note}...")
+        log_working(f"Deploying Cloudflare Worker '{worker_name}'{label_note}...")
         result = subprocess.run(
             ["npx", "--yes", "wrangler", "deploy"],
             cwd=tmp_path,
@@ -80,12 +77,14 @@ def deploy_worker(
             )
 
         worker_url = match.group(0)
+        log_success(f"Worker successfully deployed: {worker_url}")
         return worker_name, worker_url
 
 
 def teardown_worker(worker_name: str, account_label: Optional[str] = None) -> None:
     """Delete a previously deployed worker (used by `andro-cfw remove`)."""
     check_node_toolchain()
+    log_working(f"Deleting Cloudflare Worker '{worker_name}'...")
     subprocess.run(
         ["npx", "--yes", "wrangler", "delete", "--name", worker_name, "--force"],
         capture_output=True,

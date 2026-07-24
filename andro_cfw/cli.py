@@ -5,8 +5,10 @@ import sys
 from pathlib import Path
 
 from .auth import cloudflare_login
+from .colors import log_info, log_working, log_success, log_error, log_warn, COLOR_GREEN, COLOR_RESET, COLOR_BOLD, COLOR_CYAN
 from .deploy import deploy_worker, teardown_worker
 from .errors import AndroCFWError
+from .platform_utils import add_to_user_path
 from .session import CFWSession, DEFAULT_SESSION_FILENAME
 
 
@@ -18,7 +20,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     session_path = _session_path(args)
 
     if session_path.exists() and not args.force:
-        print(f"[andro-cfw] '{session_path}' already exists. Use --force to redeploy and overwrite it.")
+        log_warn(f"'{session_path}' already exists. Use --force to redeploy and overwrite it.")
         return 1
 
     num_accounts = max(1, args.accounts)
@@ -29,8 +31,8 @@ def cmd_init(args: argparse.Namespace) -> int:
             worker_name, worker_url = deploy_worker(worker_name=args.name)
             session = CFWSession.new(worker_name=worker_name, worker_url=worker_url)
         else:
-            print(
-                f"[andro-cfw] Multi-account load-balanced mode: setting up {num_accounts} "
+            log_info(
+                f"Multi-account load-balanced mode: setting up {num_accounts} "
                 "Cloudflare accounts. You'll be asked to log in once per account "
                 "(each in its own isolated browser/OAuth session) -- log in with a "
                 "DIFFERENT Cloudflare account each time.\n"
@@ -45,12 +47,12 @@ def cmd_init(args: argparse.Namespace) -> int:
                 entries.append((worker_name, worker_url, label))
             session = CFWSession.new_multi(entries)
     except AndroCFWError as exc:
-        print(f"[andro-cfw] ERROR: {exc}")
+        log_error(f"ERROR: {exc}")
         return 1
 
     saved_path = session.save(str(session_path))
 
-    print("\n[andro-cfw] Success!")
+    log_success("Success!")
     if len(session.workers) > 1:
         print(f"  Accounts    : {len(session.workers)} (load-balanced, auto failover on daily quota limit)")
         for w in session.workers:
@@ -60,13 +62,13 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"  Worker URL  : {session.worker_url}")
     print(f"  Session file: {saved_path}")
     print("\nUse it in your bot code (identical whether single- or multi-account):\n")
-    print("  from andro_cfw import CFWSession")
-    print("  session = CFWSession.load()")
-    print("  import telebot")
-    print("  telebot.apihelper.API_URL = session.telebot_api_url()")
-    print("  telebot.apihelper.FILE_URL = session.telebot_file_url()")
-    print("  bot = telebot.TeleBot('<YOUR_BOT_TOKEN>')")
-    print("  bot.infinity_polling()\n")
+    print(f"  {COLOR_CYAN}from andro_cfw import CFWSession{COLOR_RESET}")
+    print(f"  {COLOR_CYAN}session = CFWSession.load(){COLOR_RESET}")
+    print(f"  {COLOR_CYAN}import telebot{COLOR_RESET}")
+    print(f"  {COLOR_CYAN}telebot.apihelper.API_URL = session.telebot_api_url(){COLOR_RESET}")
+    print(f"  {COLOR_CYAN}telebot.apihelper.FILE_URL = session.telebot_file_url(){COLOR_RESET}")
+    print(f"  {COLOR_CYAN}bot = telebot.TeleBot('<YOUR_BOT_TOKEN>'){COLOR_RESET}")
+    print(f"  {COLOR_CYAN}bot.infinity_polling(){COLOR_RESET}\n")
     return 0
 
 
@@ -75,7 +77,7 @@ def cmd_add_account(args: argparse.Namespace) -> int:
     try:
         session = CFWSession.load(str(session_path))
     except AndroCFWError as exc:
-        print(f"[andro-cfw] {exc}")
+        log_error(f"{exc}")
         return 1
 
     next_num = len(session.workers) + 1
@@ -85,15 +87,15 @@ def cmd_add_account(args: argparse.Namespace) -> int:
         name = f"{args.name}-{next_num}" if args.name else None
         worker_name, worker_url = deploy_worker(worker_name=name, account_label=label)
     except AndroCFWError as exc:
-        print(f"[andro-cfw] ERROR: {exc}")
+        log_error(f"ERROR: {exc}")
         return 1
 
     from .session import WorkerEntry
     session.workers.append(WorkerEntry(worker_name=worker_name, worker_url=worker_url, account_label=label))
     session.save(str(session_path))
 
-    print(f"\n[andro-cfw] Added '{label}' ({worker_name}) to the load-balanced pool.")
-    print(f"[andro-cfw] Total accounts now: {len(session.workers)}")
+    log_success(f"Added '{label}' ({worker_name}) to the load-balanced pool.")
+    log_info(f"Total accounts now: {len(session.workers)}")
     return 0
 
 
@@ -101,7 +103,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     try:
         session = CFWSession.load(str(_session_path(args)) if args.path else None)
     except AndroCFWError as exc:
-        print(f"[andro-cfw] {exc}")
+        log_error(f"{exc}")
         return 1
 
     print(f"Created at  : {session.created_at}")
@@ -121,7 +123,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     try:
         session = CFWSession.load(str(_session_path(args)) if args.path else None)
     except AndroCFWError as exc:
-        print(f"[andro-cfw] {exc}")
+        log_error(f"{exc}")
         return 1
 
     for w in session.workers:
@@ -131,7 +133,193 @@ def cmd_remove(args: argparse.Namespace) -> int:
     if session_path.exists():
         session_path.unlink()
 
-    print(f"[andro-cfw] {len(session.workers)} worker(s) deleted and local session removed.")
+    log_success(f"{len(session.workers)} worker(s) deleted and local session removed.")
+    return 0
+
+
+def cmd_setup_path(args: argparse.Namespace) -> int:
+    ok = add_to_user_path()
+    return 0 if ok else 1
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    try:
+        session = CFWSession.load(str(_session_path(args)) if args.path else None)
+    except AndroCFWError as exc:
+        log_error(f"{exc}")
+        return 1
+
+    log_working(f"Testing connectivity to {len(session.workers)} Cloudflare Worker(s)...")
+    results = session.check_health(timeout=args.timeout)
+
+    print()
+    all_ok = True
+    for r in results:
+        label = r["account_label"] or r["worker_name"]
+        if r["status"] == 200:
+            status_str = f"{COLOR_GREEN}HTTP 200 OK{COLOR_RESET}"
+            ping_str = f"{COLOR_CYAN}{r['latency_ms']} ms{COLOR_RESET}"
+        elif r["status"] > 0:
+            status_str = f"{COLOR_YELLOW}HTTP {r['status']}{COLOR_RESET}"
+            ping_str = f"{r['latency_ms']} ms"
+            all_ok = False
+        else:
+            status_str = f"{COLOR_BOLD}\033[1;31mFAILED ({r['error']}){COLOR_RESET}"
+            ping_str = "-"
+            all_ok = False
+
+        state_str = f"{COLOR_YELLOW}[exhausted]{COLOR_RESET}" if r["is_exhausted"] else f"{COLOR_GREEN}[available]{COLOR_RESET}"
+        print(f"  Worker [{r['index']}]: {label}")
+        print(f"    URL     : {r['worker_url']}")
+        print(f"    Status  : {status_str} ({ping_str})")
+        print(f"    Quota   : {state_str}")
+        print()
+
+    if all_ok:
+        log_success("All Cloudflare Worker proxies are healthy and responding!")
+        return 0
+    else:
+        log_warn("One or more workers had connection or status issues.")
+        return 1
+
+
+FRAMEWORK_SNIPPETS = {
+    "telebot": """import telebot
+from andro_cfw import CFWSession
+
+# Load your deployed worker proxy session
+session = CFWSession.load()
+
+# Configure telebot to route requests through andro-cfw proxy
+telebot.apihelper.API_URL = session.telebot_api_url()
+telebot.apihelper.FILE_URL = session.telebot_file_url()
+
+bot = telebot.TeleBot("YOUR_BOT_TOKEN")
+
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+    bot.reply_to(message, "Hello! This bot is running through andro-cfw proxy! 🚀")
+
+if __name__ == "__main__":
+    print("Bot is starting via andro-cfw proxy...")
+    bot.infinity_polling()
+""",
+    "ptb": """from telegram.ext import ApplicationBuilder, CommandHandler
+from andro_cfw import CFWSession
+
+# Load your deployed worker proxy session
+session = CFWSession.load()
+
+app = (
+    ApplicationBuilder()
+    .token("YOUR_BOT_TOKEN")
+    .base_url(session.ptb_base_url())
+    .base_file_url(session.ptb_base_file_url())
+    .build()
+)
+
+async def start(update, context):
+    await update.message.reply_text("Hello! This bot is running through andro-cfw proxy! 🚀")
+
+app.add_handler(CommandHandler("start", start))
+
+if __name__ == "__main__":
+    print("Bot is starting via andro-cfw proxy...")
+    app.run_polling()
+""",
+    "aiogram": """import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import CommandStart
+from aiogram.client.telegram import TelegramAPIServer
+from aiogram.client.session.aiohttp import AiohttpSession
+from andro_cfw import CFWSession
+
+# Load your deployed worker proxy session
+session = CFWSession.load()
+
+api_server = TelegramAPIServer(**session.aiogram_server_url())
+bot = Bot(
+    token="YOUR_BOT_TOKEN",
+    session=AiohttpSession(api=api_server),
+)
+dp = Dispatcher()
+
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    await message.answer("Hello! This bot is running through andro-cfw proxy! 🚀")
+
+async def main():
+    print("Bot is starting via andro-cfw proxy...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+""",
+    "pyrogram": """from pyrogram import Client, filters
+from andro_cfw import CFWSession
+
+# Load your deployed worker proxy session
+session = CFWSession.load()
+
+app = Client(
+    "andro_bot",
+    bot_token="YOUR_BOT_TOKEN",
+    api_id=12345,          # Replace with your Telegram API ID
+    api_hash="YOUR_API_HASH", # Replace with your Telegram API Hash
+)
+
+# Set Pyrogram HTTP base URL override
+app.api_url = session.api_base_url()
+
+@app.on_message(filters.command("start"))
+async def start_cmd(client, message):
+    await message.reply_text("Hello! Pyrogram is running through andro-cfw proxy! 🚀")
+
+if __name__ == "__main__":
+    print("Pyrogram bot starting via andro-cfw proxy...")
+    app.run()
+""",
+    "hydrogram": """from hydrogram import Client, filters
+from andro_cfw import CFWSession
+
+# Load your deployed worker proxy session
+session = CFWSession.load()
+
+app = Client(
+    "andro_bot",
+    bot_token="YOUR_BOT_TOKEN",
+    api_id=12345,          # Replace with your Telegram API ID
+    api_hash="YOUR_API_HASH", # Replace with your Telegram API Hash
+)
+
+# Set Hydrogram HTTP base URL override
+app.api_url = session.api_base_url()
+
+@app.on_message(filters.command("start"))
+async def start_cmd(client, message):
+    await message.reply_text("Hello! Hydrogram is running through andro-cfw proxy! 🚀")
+
+if __name__ == "__main__":
+    print("Hydrogram bot starting via andro-cfw proxy...")
+    app.run()
+""",
+}
+
+
+def cmd_snippet(args: argparse.Namespace) -> int:
+    fw = args.framework.lower()
+    if fw not in FRAMEWORK_SNIPPETS:
+        log_error(f"Unknown framework '{fw}'. Choose from: {', '.join(FRAMEWORK_SNIPPETS.keys())}")
+        return 1
+
+    code = FRAMEWORK_SNIPPETS[fw]
+    if args.out:
+        out_path = Path(args.out)
+        out_path.write_text(code, encoding="utf-8")
+        log_success(f"Generated {fw} starter bot snippet to '{out_path}'")
+    else:
+        print(f"\n--- Starter code for {COLOR_CYAN}{fw}{COLOR_RESET} ---")
+        print(code)
     return 0
 
 
@@ -160,9 +348,22 @@ def main(argv=None) -> int:
     p_status.add_argument("--path", help="Project directory (default: current directory)")
     p_status.set_defaults(func=cmd_status)
 
+    p_check = sub.add_parser("check", help="Test live network connectivity and ping response times of deployed worker(s).")
+    p_check.add_argument("--path", help="Project directory (default: current directory)")
+    p_check.add_argument("--timeout", type=int, default=5, help="HTTP connection timeout in seconds (default: 5)")
+    p_check.set_defaults(func=cmd_check)
+
+    p_snippet = sub.add_parser("snippet", help="Generate ready-to-run Python code for telebot, ptb, aiogram, pyrogram, or hydrogram.")
+    p_snippet.add_argument("--framework", "-f", default="telebot", choices=["telebot", "ptb", "aiogram", "pyrogram", "hydrogram"], help="Framework name (default: telebot)")
+    p_snippet.add_argument("--out", "-o", help="Optional output file path to write code to (e.g. bot.py)")
+    p_snippet.set_defaults(func=cmd_snippet)
+
     p_remove = sub.add_parser("remove", help="Delete the deployed worker(s) and local session.")
     p_remove.add_argument("--path", help="Project directory (default: current directory)")
     p_remove.set_defaults(func=cmd_remove)
+
+    p_path = sub.add_parser("setup-path", help="Safely add andro-cfw's executable folder to your User PATH.")
+    p_path.set_defaults(func=cmd_setup_path)
 
     args = parser.parse_args(argv)
     return args.func(args)
