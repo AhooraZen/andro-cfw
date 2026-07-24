@@ -8,6 +8,7 @@ from .auth import cloudflare_login
 from .colors import log_info, log_working, log_success, log_error, log_warn, COLOR_GREEN, COLOR_RESET, COLOR_BOLD, COLOR_CYAN
 from .deploy import deploy_worker, teardown_worker
 from .errors import AndroCFWError
+from .platform_utils import add_to_user_path
 from .session import CFWSession, DEFAULT_SESSION_FILENAME
 
 
@@ -136,6 +137,11 @@ def cmd_remove(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_setup_path(args: argparse.Namespace) -> int:
+    ok = add_to_user_path()
+    return 0 if ok else 1
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="andro-cfw", description="Run Telegram bots through your own Cloudflare Worker proxy.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -164,6 +170,9 @@ def main(argv=None) -> int:
     p_remove = sub.add_parser("remove", help="Delete the deployed worker(s) and local session.")
     p_remove.add_argument("--path", help="Project directory (default: current directory)")
     p_remove.set_defaults(func=cmd_remove)
+
+    p_path = sub.add_parser("setup-path", help="Safely add andro-cfw's executable folder to your User PATH.")
+    p_path.set_defaults(func=cmd_setup_path)
 
     args = parser.parse_args(argv)
     return args.func(args)

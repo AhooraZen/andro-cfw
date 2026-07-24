@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from .colors import log_info, log_working, log_success, log_error, log_dim
@@ -262,3 +263,87 @@ def _install_linux(info: SystemInfo) -> bool:
         "Install Node.js manually from https://nodejs.org or via nvm."
     )
     return False
+
+
+def add_to_user_path(target_dir: Optional[Path] = None) -> bool:
+    """
+    Safely append target_dir (or directory containing current script) to the user's PATH.
+
+    IMPORTANT SAFETY GUARANTEE:
+    - On Windows: Uses Python's native `winreg` module to read HKCU\\Environment\\PATH,
+      appends target_dir using ';' separator if missing, and NEVER overwrites existing PATH entries.
+    - On Linux/macOS: Appends `export PATH="<target_dir>:$PATH"` to shell rc file (~/.bashrc or ~/.zshrc).
+    """
+    if target_dir is None:
+        target_dir = Path(sys.argv[0]).resolve().parent
+
+    sys_family = platform.system().lower()
+
+    if sys_family == "windows":
+        return _add_to_windows_user_path(target_dir)
+    return _add_to_posix_user_path(target_dir)
+
+
+def _add_to_windows_user_path(target_dir: Path) -> bool:
+    target_str = str(target_dir.resolve())
+    try:
+        import winreg
+        import ctypes
+
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
+        try:
+            existing_path, reg_type = winreg.QueryValueEx(key, "Path")
+        except FileNotFoundError:
+            existing_path, reg_type = "", winreg.REG_EXPAND_SZ
+
+        existing_parts = [p.strip().lower() for p in existing_path.split(";") if p.strip()]
+        if target_str.lower() in existing_parts:
+            log_info(f"'{target_str}' is already in Windows User PATH.")
+            winreg.CloseKey(key)
+            return True
+
+        # SAFELY APPEND -- NEVER OVERWRITE EXISTING PATH
+        new_path = f"{existing_path.rstrip(';')};{target_str}" if existing_path else target_str
+        winreg.SetValueEx(key, "Path", 0, reg_type, new_path)
+        winreg.CloseKey(key)
+
+        # Notify running Windows processes of environment change
+        HWND_BROADCAST = 0xFFFF
+        WM_SETTINGCHANGE = 0x001A
+        SMTO_ABORTIFHUNG = 0x0002
+        result = ctypes.c_ulong()
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+            SMTO_ABORTIFHUNG, 5000, ctypes.byref(result)
+        )
+        log_success(f"Safely appended '{target_str}' to Windows User PATH (HKCU\\Environment\\PATH).")
+        log_dim("Please restart open terminal windows for the updated PATH to take effect.")
+        return True
+    except Exception as exc:
+        log_error(f"Could not update Windows User PATH: {exc}")
+        return False
+
+
+def _add_to_posix_user_path(target_dir: Path) -> bool:
+    target_str = str(target_dir.resolve())
+    current_paths = os.environ.get("PATH", "").split(":")
+    if target_str in current_paths or str(target_dir.expanduser()) in current_paths:
+        log_info(f"'{target_str}' is already in PATH.")
+        return True
+
+    shell = os.environ.get("SHELL", "")
+    rc_name = ".zshrc" if "zsh" in shell else ".bashrc"
+    rc_file = Path.home() / rc_name
+    export_line = f'\nexport PATH="{target_str}:$PATH"\n'
+
+    try:
+        content = rc_file.read_text(encoding="utf-8") if rc_file.exists() else ""
+        if target_str not in content:
+            with open(rc_file, "a", encoding="utf-8") as fh:
+                fh.write(export_line)
+            log_success(f"Appended '{target_str}' to {rc_file.name}.")
+            log_dim(f"Run `source ~/{rc_name}` or restart your terminal.")
+        return True
+    except Exception as exc:
+        log_error(f"Could not update {rc_file}: {exc}")
+        return False

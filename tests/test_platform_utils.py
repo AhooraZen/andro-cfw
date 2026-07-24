@@ -16,6 +16,8 @@ from andro_cfw.platform_utils import (
     _install_windows,
     _install_macos,
     _install_linux,
+    add_to_user_path,
+    _add_to_posix_user_path,
 )
 
 
@@ -254,3 +256,39 @@ def test_install_nodejs_dispatcher():
 
     info_other = SystemInfo("unknown", None, None, None, False, "x86_64")
     assert install_nodejs(info_other) is False
+
+
+def test_add_to_user_path_posix(tmp_path):
+    target_dir = tmp_path / "bin"
+    target_dir.mkdir()
+
+    with patch("platform.system", return_value="Linux"), \
+         patch("andro_cfw.platform_utils._add_to_posix_user_path", return_value=True) as mock_posix:
+        assert add_to_user_path(target_dir) is True
+        mock_posix.assert_called_once_with(target_dir)
+
+
+def test_add_to_posix_user_path_already_in_env(tmp_path):
+    target_dir = tmp_path / "bin"
+    target_dir.mkdir()
+
+    with patch.dict("os.environ", {"PATH": f"/usr/bin:{target_dir.resolve()}"}):
+        assert _add_to_posix_user_path(target_dir) is True
+
+
+def test_add_to_posix_user_path_append_rc(tmp_path):
+    target_dir = tmp_path / "bin"
+    target_dir.mkdir()
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    rc_file = fake_home / ".bashrc"
+    rc_file.write_text("export FOO=1\n")
+
+    with patch.dict("os.environ", {"PATH": "/usr/bin", "SHELL": "/bin/bash"}), \
+         patch("pathlib.Path.home", return_value=fake_home), \
+         patch("andro_cfw.platform_utils.add_to_user_path", import_from=True):
+        assert _add_to_posix_user_path(target_dir) is True
+        content = rc_file.read_text()
+        assert str(target_dir.resolve()) in content
+
