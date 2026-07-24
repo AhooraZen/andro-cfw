@@ -32,7 +32,7 @@ Cloudflare's edge network is reachable from these regions even when Telegram's A
 - **Multi-library support** — telebot, python-telegram-bot, aiogram, pyrogram, hydrogram
 - **No monkey-patching** — just swap the API URL, everything else stays normal
 - **Zero-setup Node.js** — andro-cfw detects your OS/distro and installs Node.js automatically if missing
-- **Smart multi-account load balancing** — pool several Cloudflare accounts' free-tier quotas, with automatic instant failover and daily auto-reset
+- **Smart multi-account load balancing** — pool several Cloudflare accounts' free-tier quotas (`andro-cfw init --accounts N` or `andro-cfw add-account`), with automatic instant failover and daily auto-reset
 - **Framework Code Generator (`andro-cfw snippet`)** — generate copy-paste ready starter code for telebot, ptb, aiogram, pyrogram, or hydrogram
 - **Live Network & Health Diagnostics (`andro-cfw check`)** — test live connection speed, HTTP status, and ping latency of all deployed workers
 - **ANSI Terminal Colors & Clean Progress** — clear colored step-by-step logging with automatic non-TTY & `NO_COLOR` safety
@@ -40,13 +40,23 @@ Cloudflare's edge network is reachable from these regions even when Telegram's A
 
 ---
 
-## 📦 Installation
+## 📦 Installation & Setup
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install andro-cfw
 ```
+
+### Registered Executable / PATH Setup
+
+If running `andro-cfw` in your terminal gives `command not found`, register it safely into your User PATH:
+
+```bash
+python -m andro_cfw.cli setup-path
+```
+- **On Windows**: Safely appends Python's `Scripts\` folder to `HKCU\Environment\PATH` via Windows Registry without overwriting existing PATH variables.
+- **On Linux / macOS**: Safely appends `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` / `~/.zshrc`.
 
 ---
 
@@ -180,6 +190,7 @@ app.api_url = session.api_base_url()
 |-----------------------------------|------------------------------------------------------------------------|
 | `andro-cfw init`                  | Log into Cloudflare and deploy a single proxy worker.                  |
 | `andro-cfw init --accounts 3`     | Log into 3 Cloudflare accounts and deploy a load-balanced worker pool. |
+| `andro-cfw add-account`           | Add one more Cloudflare account/worker to an existing session.         |
 | `andro-cfw snippet -f telebot`    | Generate ready-to-run Python code for Telebot, PTB, Aiogram, Pyrogram, or Hydrogram. |
 | `andro-cfw check`                 | Test live network connectivity and ping response times of deployed worker(s). |
 | `andro-cfw status`                | Show the worker(s) saved for this project, and per-account health.     |

@@ -38,13 +38,23 @@
 
 ---
 
-## 📦 نصب
+## 📦 نصب و تنظیم راه اندازی
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install andro-cfw
 ```
+
+### ثبت ایمن دستور در PATH سیستم‌عامل
+
+اگر بعد از نصب، اجرای `andro-cfw` در ترمینال با خطای `command not found` مواجه شد، با اجرای دستور زیر مسیر اجرایی پکیج رو به صورت ایمن به PATH اضافه کنید:
+
+```bash
+python -m andro_cfw.cli setup-path
+```
+- **در ویندوز**: مسیر `Scripts\` پایتون رو در `HKCU\Environment\PATH` ریجستری اضافه می‌کنه بدون اینکه PATH فعلی سیستم پاک یا خراب بشه.
+- **در لینوکس / مک**: مسیر `~/.local/bin` یا venv رو به `.zshrc` / `.bashrc` اضافه می‌کنه.
 
 ---
 
@@ -178,6 +188,7 @@ app.api_url = session.api_base_url()
 |-------|-------|
 | `andro-cfw init` | لاگین کلادفلر + deploy ورکر + ساخت سشن |
 | `andro-cfw init --accounts 2` | ساخت سشن چنداکانته لودبالانس‌شده |
+| `andro-cfw add-account` | افزودن اکانت جدید کلادفلر به سشن موجود |
 | `andro-cfw snippet -f telebot` | ساخت خودکار کد پایتون آماده برای لایبری‌های مختلف |
 | `andro-cfw check` | تست پینگ زنده و بررسی سلامت ورکرهای دپلوی شده |
 | `andro-cfw status` | نمایش اطلاعات ورکرهای ذخیره‌شده |

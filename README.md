@@ -40,7 +40,7 @@ Cloudflare's edge network is reachable from these regions even when Telegram's A
 
 ---
 
-## 📦 Installation
+## 📦 Installation & Setup
 
 ```bash
 python -m venv .venv
@@ -48,9 +48,19 @@ source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install andro-cfw
 ```
 
+### Registered Executable / PATH Setup
+
+If running `andro-cfw` in your terminal gives `command not found`, register it safely into your User PATH:
+
+```bash
+python -m andro_cfw.cli setup-path
+```
+- **On Windows**: Safely appends Python's `Scripts\` folder to `HKCU\Environment\PATH` via Windows Registry without overwriting existing PATH variables.
+- **On Linux / macOS**: Safely appends `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` / `~/.zshrc`.
+
 ---
 
-## 🚀 Setup (one time)
+## 🚀 One-Time Initialization (`init`)
 
 ```bash
 cd your-bot-project/
@@ -217,7 +227,7 @@ app.api_url = session.api_base_url()
 ### 0.2.1
 - **Framework Starter Code Generator (`andro-cfw snippet`)**: Generate copy-paste ready starter Python code for Telebot, PTB, Aiogram, Pyrogram, or Hydrogram.
 - **Worker Health & Ping Checker (`andro-cfw check`)**: Ping worker proxies to measure response latency (ms) and HTTP status.
-- **Safe PATH Registration (`andro-cfw setup-path`)**: Safely appends executable folder to Windows Registry (`HKCU\Environment\PATH`) or POSIX shells without overwriting PATH.
+- **Safe PATH Registration (`andro-cfw setup-path`)**: Safely appends executable folder (`Scripts/` or `~/.local/bin`) to Windows Registry (`HKCU\Environment\PATH`) or POSIX shells without overwriting PATH.
 - **ANSI Terminal Formatting**: Colorful step-by-step progress logging in CLI.
 - **64 Automated Unit Tests**: Comprehensive test suite covering all modules.
 
