@@ -267,7 +267,7 @@ def _install_linux(info: SystemInfo) -> bool:
 
 def add_to_user_path(target_dir: Optional[Path] = None) -> bool:
     """
-    Safely append target_dir (or directory containing current script) to the user's PATH.
+    Safely append target_dir (or directory containing andro-cfw executable) to the user's PATH.
 
     IMPORTANT SAFETY GUARANTEE:
     - On Windows: Uses Python's native `winreg` module to read HKCU\\Environment\\PATH,
@@ -275,7 +275,7 @@ def add_to_user_path(target_dir: Optional[Path] = None) -> bool:
     - On Linux/macOS: Appends `export PATH="<target_dir>:$PATH"` to shell rc file (~/.bashrc or ~/.zshrc).
     """
     if target_dir is None:
-        target_dir = Path(sys.argv[0]).resolve().parent
+        target_dir = Path(sys.executable).parent
 
     sys_family = platform.system().lower()
 
