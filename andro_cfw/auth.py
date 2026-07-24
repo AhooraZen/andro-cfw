@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from .colors import log_step, log_working, log_dim, log_error
 from .errors import DeploymentError
 from .toolchain import check_node_toolchain
 
@@ -16,19 +17,18 @@ def _account_env(account_label: Optional[str]) -> dict:
     Build an environment dict that isolates wrangler's OAuth token storage
     per account label, so andro-cfw can hold multiple logged-in Cloudflare
     accounts at once (needed for the multi-account load-balancing feature).
-
-    wrangler stores its OAuth config under `$WRANGLER_HOME` (if set) or
-    otherwise under the user's home/config directory. We point a fake
-    per-account "home" at an isolated folder so each account's login is
-    completely independent from the others.
     """
     env = os.environ.copy()
+    existing_no_proxy = env.get("NO_PROXY", env.get("no_proxy", ""))
+    no_proxy_additions = "localhost,127.0.0.1,::1"
+    new_no_proxy = f"{existing_no_proxy},{no_proxy_additions}" if existing_no_proxy else no_proxy_additions
+    env["NO_PROXY"] = new_no_proxy
+    env["no_proxy"] = new_no_proxy
+
     if account_label:
         account_home = ACCOUNTS_DIR / account_label
         account_home.mkdir(parents=True, exist_ok=True)
         env["WRANGLER_HOME"] = str(account_home)
-        # Fallback for older wrangler versions that only respect $HOME /
-        # $XDG_CONFIG_HOME for locating their config directory.
         env["XDG_CONFIG_HOME"] = str(account_home)
     return env
 
@@ -36,21 +36,15 @@ def _account_env(account_label: Optional[str]) -> dict:
 def cloudflare_login(account_label: Optional[str] = None) -> None:
     """
     Launch Cloudflare's official OAuth login flow via `wrangler login`.
-
-    This opens the user's default browser, where they log into (or sign up
-    for) Cloudflare and authorize the Wrangler CLI. andro-cfw never sees
-    the user's Cloudflare password; authentication is handled entirely by
-    Cloudflare + wrangler's own OAuth implementation.
-
-    If `account_label` is given, the login is stored in an isolated config
-    directory (see `_account_env`) so it doesn't overwrite a previous
-    account's login -- this is how andro-cfw supports logging into several
-    Cloudflare accounts for load-balanced deployments.
     """
+    log_working("Checking and verifying Node.js & Wrangler toolchain...")
     check_node_toolchain()
+
     label_note = f" (account: {account_label})" if account_label else ""
-    print(f"\n[andro-cfw] Opening your browser for Cloudflare login{label_note}...")
-    print("[andro-cfw] Please log in (or sign up) and click 'Allow' to authorize Wrangler.\n")
+    log_working(f"Downloading & preparing Cloudflare Wrangler CLI{label_note}...")
+    log_step(f"Opening your browser for Cloudflare login{label_note}...")
+    log_dim("Please log in (or sign up) and click 'Allow' to authorize Wrangler.")
+    log_dim("(If your browser does not open automatically, copy the link printed below by Wrangler into your browser)\n")
 
     result = subprocess.run(
         ["npx", "--yes", "wrangler", "login"],

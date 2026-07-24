@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass
 from typing import Optional
 
+from .colors import log_info, log_working, log_success, log_error, log_dim
+
 
 @dataclass
 class SystemInfo:
@@ -36,11 +38,11 @@ class SystemInfo:
 
     def pretty(self) -> str:
         if self.os_family == "linux":
-            return f"Linux ({self.distro or 'unknown distro'}, pkg-manager: {self.package_manager or 'none found'})"
+            return f"Linux ({self.distro or 'unknown distro'}, package manager: {self.package_manager or 'none found'})"
         if self.os_family == "macos":
-            return f"macOS (pkg-manager: {self.package_manager or 'none found'})"
+            return f"macOS (package manager: {self.package_manager or 'none found'})"
         if self.os_family == "windows":
-            return f"Windows (pkg-manager: {self.package_manager or 'none found'})"
+            return f"Windows (package manager: {self.package_manager or 'none found'})"
         return f"{self.os_family} (unrecognized)"
 
 
@@ -80,7 +82,7 @@ def detect_system() -> SystemInfo:
             distro=None,
             distro_like=None,
             package_manager=pm,
-            is_root=True,  # winget/choco per-user installs don't require elevation
+            is_root=True,
             arch=arch,
         )
 
@@ -109,7 +111,7 @@ def detect_system() -> SystemInfo:
             distro_like and ("fedora" in distro_like or "rhel" in distro_like)
         ):
             pm = _first_available("dnf", "yum")
-        elif distro_id in ("arch", "manjaro", "endeavouros") or (
+        elif distro_id in ("arch", "manjaro", "endeavouros", "parch") or (
             distro_like and "arch" in distro_like
         ):
             pm = _first_available("pacman")
@@ -120,7 +122,6 @@ def detect_system() -> SystemInfo:
         elif distro_id == "alpine":
             pm = _first_available("apk")
         else:
-            # Fallback: probe every known package manager directly.
             pm = _first_available("apt-get", "dnf", "yum", "pacman", "zypper", "apk")
 
         return SystemInfo(
@@ -145,7 +146,7 @@ def detect_system() -> SystemInfo:
 def _run(cmd: list[str], *, use_sudo: bool = False, timeout: int = 600) -> subprocess.CompletedProcess:
     if use_sudo and shutil.which("sudo") and os.geteuid() != 0:
         cmd = ["sudo", "-n", *cmd] if _sudo_noninteractive_ok() else ["sudo", *cmd]
-    print(f"[andro-cfw] Running: {' '.join(cmd)}")
+    log_dim(f"Executing: {' '.join(cmd)}")
     return subprocess.run(cmd, timeout=timeout)
 
 
@@ -164,13 +165,9 @@ def install_nodejs(info: SystemInfo) -> bool:
     """
     Attempt to automatically install Node.js (which brings npm/npx along)
     using the best package manager detected for this system.
-
-    Returns True if the install command completed without error (the
-    caller re-checks `node --version` / `npx --version` afterwards to
-    confirm success), False if no automatic method was available.
     """
-    print(f"[andro-cfw] Detected system: {info.pretty()}")
-    print("[andro-cfw] Node.js/npx not found — attempting automatic installation...")
+    log_info(f"Detected system: {info.pretty()}")
+    log_working("Node.js/npx not found — attempting automatic installation using system package manager...")
 
     try:
         if info.os_family == "windows":
@@ -180,10 +177,10 @@ def install_nodejs(info: SystemInfo) -> bool:
         if info.os_family == "linux":
             return _install_linux(info)
     except subprocess.TimeoutExpired:
-        print("[andro-cfw] Installation timed out.")
+        log_error("Installation timed out.")
         return False
-    except Exception as exc:  # noqa: BLE001 - we want to fall back gracefully
-        print(f"[andro-cfw] Automatic installation failed: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        log_error(f"Automatic installation failed: {exc}")
         return False
 
     return False
@@ -200,10 +197,9 @@ def _install_windows(info: SystemInfo) -> bool:
     if info.package_manager == "scoop":
         result = _run(["scoop", "install", "nodejs-lts"])
         return result.returncode == 0
-    print(
-        "[andro-cfw] No supported Windows package manager found (winget/choco/scoop).\n"
-        "[andro-cfw] Install winget (comes with modern Windows 10/11 'App Installer') "
-        "or install Node.js manually from https://nodejs.org"
+    log_error(
+        "No supported Windows package manager found (winget/choco/scoop).\n"
+        "Install winget or download Node.js manually from https://nodejs.org"
     )
     return False
 
@@ -215,9 +211,8 @@ def _install_macos(info: SystemInfo) -> bool:
     if info.package_manager == "port":
         result = _run(["port", "install", "nodejs20"], use_sudo=True)
         return result.returncode == 0
-    print(
-        "[andro-cfw] Homebrew not found. Install it from https://brew.sh and re-run, "
-        "or install Node.js manually from https://nodejs.org"
+    log_error(
+        "Homebrew not found. Install it from https://brew.sh or download Node.js manually from https://nodejs.org"
     )
     return False
 
@@ -225,8 +220,6 @@ def _install_macos(info: SystemInfo) -> bool:
 def _install_linux(info: SystemInfo) -> bool:
     pm = info.package_manager
     if pm in ("apt-get", "apt"):
-        # Prefer NodeSource LTS setup script for a modern Node version;
-        # fall back to the distro's own (often older) nodejs package.
         if shutil.which("curl") or shutil.which("wget"):
             fetcher = ["curl", "-fsSL"] if shutil.which("curl") else ["wget", "-qO-"]
             setup = subprocess.run(
@@ -252,6 +245,7 @@ def _install_linux(info: SystemInfo) -> bool:
         return result.returncode == 0
 
     if pm == "pacman":
+        log_info("Installing nodejs and npm via pacman package manager...")
         result = _run(["pacman", "-Sy", "--noconfirm", "nodejs", "npm"], use_sudo=True)
         return result.returncode == 0
 
@@ -263,10 +257,8 @@ def _install_linux(info: SystemInfo) -> bool:
         result = _run(["apk", "add", "--no-cache", "nodejs", "npm"], use_sudo=True)
         return result.returncode == 0
 
-    print(
-        "[andro-cfw] No supported Linux package manager found "
-        "(apt/dnf/yum/pacman/zypper/apk).\n"
-        "[andro-cfw] Install Node.js manually from https://nodejs.org "
-        "or via https://github.com/nvm-sh/nvm"
+    log_error(
+        "No supported Linux package manager found (apt/dnf/yum/pacman/zypper/apk).\n"
+        "Install Node.js manually from https://nodejs.org or via nvm."
     )
     return False

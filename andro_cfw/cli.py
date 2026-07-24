@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from .auth import cloudflare_login
+from .colors import log_info, log_working, log_success, log_error, log_warn, COLOR_GREEN, COLOR_RESET, COLOR_BOLD, COLOR_CYAN
 from .deploy import deploy_worker, teardown_worker
 from .errors import AndroCFWError
 from .session import CFWSession, DEFAULT_SESSION_FILENAME
@@ -18,7 +19,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     session_path = _session_path(args)
 
     if session_path.exists() and not args.force:
-        print(f"[andro-cfw] '{session_path}' already exists. Use --force to redeploy and overwrite it.")
+        log_warn(f"'{session_path}' already exists. Use --force to redeploy and overwrite it.")
         return 1
 
     num_accounts = max(1, args.accounts)
@@ -29,8 +30,8 @@ def cmd_init(args: argparse.Namespace) -> int:
             worker_name, worker_url = deploy_worker(worker_name=args.name)
             session = CFWSession.new(worker_name=worker_name, worker_url=worker_url)
         else:
-            print(
-                f"[andro-cfw] Multi-account load-balanced mode: setting up {num_accounts} "
+            log_info(
+                f"Multi-account load-balanced mode: setting up {num_accounts} "
                 "Cloudflare accounts. You'll be asked to log in once per account "
                 "(each in its own isolated browser/OAuth session) -- log in with a "
                 "DIFFERENT Cloudflare account each time.\n"
@@ -45,12 +46,12 @@ def cmd_init(args: argparse.Namespace) -> int:
                 entries.append((worker_name, worker_url, label))
             session = CFWSession.new_multi(entries)
     except AndroCFWError as exc:
-        print(f"[andro-cfw] ERROR: {exc}")
+        log_error(f"ERROR: {exc}")
         return 1
 
     saved_path = session.save(str(session_path))
 
-    print("\n[andro-cfw] Success!")
+    log_success("Success!")
     if len(session.workers) > 1:
         print(f"  Accounts    : {len(session.workers)} (load-balanced, auto failover on daily quota limit)")
         for w in session.workers:
@@ -60,13 +61,13 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"  Worker URL  : {session.worker_url}")
     print(f"  Session file: {saved_path}")
     print("\nUse it in your bot code (identical whether single- or multi-account):\n")
-    print("  from andro_cfw import CFWSession")
-    print("  session = CFWSession.load()")
-    print("  import telebot")
-    print("  telebot.apihelper.API_URL = session.telebot_api_url()")
-    print("  telebot.apihelper.FILE_URL = session.telebot_file_url()")
-    print("  bot = telebot.TeleBot('<YOUR_BOT_TOKEN>')")
-    print("  bot.infinity_polling()\n")
+    print(f"  {COLOR_CYAN}from andro_cfw import CFWSession{COLOR_RESET}")
+    print(f"  {COLOR_CYAN}session = CFWSession.load(){COLOR_RESET}")
+    print(f"  {COLOR_CYAN}import telebot{COLOR_RESET}")
+    print(f"  {COLOR_CYAN}telebot.apihelper.API_URL = session.telebot_api_url(){COLOR_RESET}")
+    print(f"  {COLOR_CYAN}telebot.apihelper.FILE_URL = session.telebot_file_url(){COLOR_RESET}")
+    print(f"  {COLOR_CYAN}bot = telebot.TeleBot('<YOUR_BOT_TOKEN>'){COLOR_RESET}")
+    print(f"  {COLOR_CYAN}bot.infinity_polling(){COLOR_RESET}\n")
     return 0
 
 
@@ -75,7 +76,7 @@ def cmd_add_account(args: argparse.Namespace) -> int:
     try:
         session = CFWSession.load(str(session_path))
     except AndroCFWError as exc:
-        print(f"[andro-cfw] {exc}")
+        log_error(f"{exc}")
         return 1
 
     next_num = len(session.workers) + 1
@@ -85,15 +86,15 @@ def cmd_add_account(args: argparse.Namespace) -> int:
         name = f"{args.name}-{next_num}" if args.name else None
         worker_name, worker_url = deploy_worker(worker_name=name, account_label=label)
     except AndroCFWError as exc:
-        print(f"[andro-cfw] ERROR: {exc}")
+        log_error(f"ERROR: {exc}")
         return 1
 
     from .session import WorkerEntry
     session.workers.append(WorkerEntry(worker_name=worker_name, worker_url=worker_url, account_label=label))
     session.save(str(session_path))
 
-    print(f"\n[andro-cfw] Added '{label}' ({worker_name}) to the load-balanced pool.")
-    print(f"[andro-cfw] Total accounts now: {len(session.workers)}")
+    log_success(f"Added '{label}' ({worker_name}) to the load-balanced pool.")
+    log_info(f"Total accounts now: {len(session.workers)}")
     return 0
 
 
@@ -101,7 +102,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     try:
         session = CFWSession.load(str(_session_path(args)) if args.path else None)
     except AndroCFWError as exc:
-        print(f"[andro-cfw] {exc}")
+        log_error(f"{exc}")
         return 1
 
     print(f"Created at  : {session.created_at}")
@@ -121,7 +122,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     try:
         session = CFWSession.load(str(_session_path(args)) if args.path else None)
     except AndroCFWError as exc:
-        print(f"[andro-cfw] {exc}")
+        log_error(f"{exc}")
         return 1
 
     for w in session.workers:
@@ -131,7 +132,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     if session_path.exists():
         session_path.unlink()
 
-    print(f"[andro-cfw] {len(session.workers)} worker(s) deleted and local session removed.")
+    log_success(f"{len(session.workers)} worker(s) deleted and local session removed.")
     return 0
 
 
