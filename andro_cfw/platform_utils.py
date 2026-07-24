@@ -274,10 +274,19 @@ def add_to_user_path(target_dir: Optional[Path] = None) -> bool:
       appends target_dir using ';' separator if missing, and NEVER overwrites existing PATH entries.
     - On Linux/macOS: Appends `export PATH="<target_dir>:$PATH"` to shell rc file (~/.bashrc or ~/.zshrc).
     """
-    if target_dir is None:
-        target_dir = Path(sys.executable).parent
-
     sys_family = platform.system().lower()
+
+    if target_dir is None:
+        user_bin = Path.home() / ".local" / "bin"
+        exec_bin = Path(sys.executable).parent
+        if (exec_bin / "andro-cfw").exists() or (exec_bin / "andro-cfw.exe").exists():
+            target_dir = exec_bin
+        elif (user_bin / "andro-cfw").exists() or (user_bin / "andro-cfw.exe").exists():
+            target_dir = user_bin
+        elif sys_family == "windows":
+            target_dir = exec_bin
+        else:
+            target_dir = user_bin
 
     if sys_family == "windows":
         return _add_to_windows_user_path(target_dir)
