@@ -6,7 +6,10 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
+
+from .colors import log_info, log_working, log_success, log_error, log_dim
 
 
 @dataclass
@@ -36,11 +39,11 @@ class SystemInfo:
 
     def pretty(self) -> str:
         if self.os_family == "linux":
-            return f"Linux ({self.distro or 'unknown distro'}, pkg-manager: {self.package_manager or 'none found'})"
+            return f"Linux ({self.distro or 'unknown distro'}, package manager: {self.package_manager or 'none found'})"
         if self.os_family == "macos":
-            return f"macOS (pkg-manager: {self.package_manager or 'none found'})"
+            return f"macOS (package manager: {self.package_manager or 'none found'})"
         if self.os_family == "windows":
-            return f"Windows (pkg-manager: {self.package_manager or 'none found'})"
+            return f"Windows (package manager: {self.package_manager or 'none found'})"
         return f"{self.os_family} (unrecognized)"
 
 
@@ -80,7 +83,7 @@ def detect_system() -> SystemInfo:
             distro=None,
             distro_like=None,
             package_manager=pm,
-            is_root=True,  # winget/choco per-user installs don't require elevation
+            is_root=True,
             arch=arch,
         )
 
@@ -109,7 +112,7 @@ def detect_system() -> SystemInfo:
             distro_like and ("fedora" in distro_like or "rhel" in distro_like)
         ):
             pm = _first_available("dnf", "yum")
-        elif distro_id in ("arch", "manjaro", "endeavouros") or (
+        elif distro_id in ("arch", "manjaro", "endeavouros", "parch") or (
             distro_like and "arch" in distro_like
         ):
             pm = _first_available("pacman")
@@ -120,7 +123,6 @@ def detect_system() -> SystemInfo:
         elif distro_id == "alpine":
             pm = _first_available("apk")
         else:
-            # Fallback: probe every known package manager directly.
             pm = _first_available("apt-get", "dnf", "yum", "pacman", "zypper", "apk")
 
         return SystemInfo(
@@ -145,7 +147,7 @@ def detect_system() -> SystemInfo:
 def _run(cmd: list[str], *, use_sudo: bool = False, timeout: int = 600) -> subprocess.CompletedProcess:
     if use_sudo and shutil.which("sudo") and os.geteuid() != 0:
         cmd = ["sudo", "-n", *cmd] if _sudo_noninteractive_ok() else ["sudo", *cmd]
-    print(f"[andro-cfw] Running: {' '.join(cmd)}")
+    log_dim(f"Executing: {' '.join(cmd)}")
     return subprocess.run(cmd, timeout=timeout)
 
 
@@ -164,13 +166,9 @@ def install_nodejs(info: SystemInfo) -> bool:
     """
     Attempt to automatically install Node.js (which brings npm/npx along)
     using the best package manager detected for this system.
-
-    Returns True if the install command completed without error (the
-    caller re-checks `node --version` / `npx --version` afterwards to
-    confirm success), False if no automatic method was available.
     """
-    print(f"[andro-cfw] Detected system: {info.pretty()}")
-    print("[andro-cfw] Node.js/npx not found — attempting automatic installation...")
+    log_info(f"Detected system: {info.pretty()}")
+    log_working("Node.js/npx not found — attempting automatic installation using system package manager...")
 
     try:
         if info.os_family == "windows":
@@ -180,10 +178,10 @@ def install_nodejs(info: SystemInfo) -> bool:
         if info.os_family == "linux":
             return _install_linux(info)
     except subprocess.TimeoutExpired:
-        print("[andro-cfw] Installation timed out.")
+        log_error("Installation timed out.")
         return False
-    except Exception as exc:  # noqa: BLE001 - we want to fall back gracefully
-        print(f"[andro-cfw] Automatic installation failed: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        log_error(f"Automatic installation failed: {exc}")
         return False
 
     return False
@@ -200,10 +198,9 @@ def _install_windows(info: SystemInfo) -> bool:
     if info.package_manager == "scoop":
         result = _run(["scoop", "install", "nodejs-lts"])
         return result.returncode == 0
-    print(
-        "[andro-cfw] No supported Windows package manager found (winget/choco/scoop).\n"
-        "[andro-cfw] Install winget (comes with modern Windows 10/11 'App Installer') "
-        "or install Node.js manually from https://nodejs.org"
+    log_error(
+        "No supported Windows package manager found (winget/choco/scoop).\n"
+        "Install winget or download Node.js manually from https://nodejs.org"
     )
     return False
 
@@ -215,9 +212,8 @@ def _install_macos(info: SystemInfo) -> bool:
     if info.package_manager == "port":
         result = _run(["port", "install", "nodejs20"], use_sudo=True)
         return result.returncode == 0
-    print(
-        "[andro-cfw] Homebrew not found. Install it from https://brew.sh and re-run, "
-        "or install Node.js manually from https://nodejs.org"
+    log_error(
+        "Homebrew not found. Install it from https://brew.sh or download Node.js manually from https://nodejs.org"
     )
     return False
 
@@ -225,8 +221,6 @@ def _install_macos(info: SystemInfo) -> bool:
 def _install_linux(info: SystemInfo) -> bool:
     pm = info.package_manager
     if pm in ("apt-get", "apt"):
-        # Prefer NodeSource LTS setup script for a modern Node version;
-        # fall back to the distro's own (often older) nodejs package.
         if shutil.which("curl") or shutil.which("wget"):
             fetcher = ["curl", "-fsSL"] if shutil.which("curl") else ["wget", "-qO-"]
             setup = subprocess.run(
@@ -252,6 +246,7 @@ def _install_linux(info: SystemInfo) -> bool:
         return result.returncode == 0
 
     if pm == "pacman":
+        log_info("Installing nodejs and npm via pacman package manager...")
         result = _run(["pacman", "-Sy", "--noconfirm", "nodejs", "npm"], use_sudo=True)
         return result.returncode == 0
 
@@ -263,10 +258,92 @@ def _install_linux(info: SystemInfo) -> bool:
         result = _run(["apk", "add", "--no-cache", "nodejs", "npm"], use_sudo=True)
         return result.returncode == 0
 
-    print(
-        "[andro-cfw] No supported Linux package manager found "
-        "(apt/dnf/yum/pacman/zypper/apk).\n"
-        "[andro-cfw] Install Node.js manually from https://nodejs.org "
-        "or via https://github.com/nvm-sh/nvm"
+    log_error(
+        "No supported Linux package manager found (apt/dnf/yum/pacman/zypper/apk).\n"
+        "Install Node.js manually from https://nodejs.org or via nvm."
     )
     return False
+
+
+def add_to_user_path(target_dir: Optional[Path] = None) -> bool:
+    """
+    Safely append target_dir (or directory containing current script) to the user's PATH.
+
+    IMPORTANT SAFETY GUARANTEE:
+    - On Windows: Uses Python's native `winreg` module to read HKCU\\Environment\\PATH,
+      appends target_dir using ';' separator if missing, and NEVER overwrites existing PATH entries.
+    - On Linux/macOS: Appends `export PATH="<target_dir>:$PATH"` to shell rc file (~/.bashrc or ~/.zshrc).
+    """
+    if target_dir is None:
+        target_dir = Path(sys.argv[0]).resolve().parent
+
+    sys_family = platform.system().lower()
+
+    if sys_family == "windows":
+        return _add_to_windows_user_path(target_dir)
+    return _add_to_posix_user_path(target_dir)
+
+
+def _add_to_windows_user_path(target_dir: Path) -> bool:
+    target_str = str(target_dir.resolve())
+    try:
+        import winreg
+        import ctypes
+
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
+        try:
+            existing_path, reg_type = winreg.QueryValueEx(key, "Path")
+        except FileNotFoundError:
+            existing_path, reg_type = "", winreg.REG_EXPAND_SZ
+
+        existing_parts = [p.strip().lower() for p in existing_path.split(";") if p.strip()]
+        if target_str.lower() in existing_parts:
+            log_info(f"'{target_str}' is already in Windows User PATH.")
+            winreg.CloseKey(key)
+            return True
+
+        # SAFELY APPEND -- NEVER OVERWRITE EXISTING PATH
+        new_path = f"{existing_path.rstrip(';')};{target_str}" if existing_path else target_str
+        winreg.SetValueEx(key, "Path", 0, reg_type, new_path)
+        winreg.CloseKey(key)
+
+        # Notify running Windows processes of environment change
+        HWND_BROADCAST = 0xFFFF
+        WM_SETTINGCHANGE = 0x001A
+        SMTO_ABORTIFHUNG = 0x0002
+        result = ctypes.c_ulong()
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+            SMTO_ABORTIFHUNG, 5000, ctypes.byref(result)
+        )
+        log_success(f"Safely appended '{target_str}' to Windows User PATH (HKCU\\Environment\\PATH).")
+        log_dim("Please restart open terminal windows for the updated PATH to take effect.")
+        return True
+    except Exception as exc:
+        log_error(f"Could not update Windows User PATH: {exc}")
+        return False
+
+
+def _add_to_posix_user_path(target_dir: Path) -> bool:
+    target_str = str(target_dir.resolve())
+    current_paths = os.environ.get("PATH", "").split(":")
+    if target_str in current_paths or str(target_dir.expanduser()) in current_paths:
+        log_info(f"'{target_str}' is already in PATH.")
+        return True
+
+    shell = os.environ.get("SHELL", "")
+    rc_name = ".zshrc" if "zsh" in shell else ".bashrc"
+    rc_file = Path.home() / rc_name
+    export_line = f'\nexport PATH="{target_str}:$PATH"\n'
+
+    try:
+        content = rc_file.read_text(encoding="utf-8") if rc_file.exists() else ""
+        if target_str not in content:
+            with open(rc_file, "a", encoding="utf-8") as fh:
+                fh.write(export_line)
+            log_success(f"Appended '{target_str}' to {rc_file.name}.")
+            log_dim(f"Run `source ~/{rc_name}` or restart your terminal.")
+        return True
+    except Exception as exc:
+        log_error(f"Could not update {rc_file}: {exc}")
+        return False
