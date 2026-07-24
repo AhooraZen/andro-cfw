@@ -298,6 +298,16 @@ def add_to_user_path(target_dir: Optional[Path] = None) -> bool:
 
 
 def _add_to_windows_user_path(target_dir: Path) -> bool:
+    # Ensure a command wrapper exists in target_dir so andro-cfw runs from anywhere
+    cmd_bin = target_dir / "andro-cfw.cmd"
+    if not cmd_bin.exists() and not (target_dir / "andro-cfw.exe").exists():
+        try:
+            cmd_content = f'@echo off\r\n"{sys.executable}" -m andro_cfw.cli %*\r\n'
+            cmd_bin.write_text(cmd_content, encoding="utf-8")
+            log_success(f"Created CLI wrapper at '{cmd_bin}'.")
+        except Exception:
+            pass
+
     target_str = str(target_dir.resolve())
     try:
         import winreg
@@ -338,6 +348,18 @@ def _add_to_windows_user_path(target_dir: Path) -> bool:
 
 
 def _add_to_posix_user_path(target_dir: Path) -> bool:
+    # Ensure a command wrapper exists in target_dir so andro-cfw runs from anywhere
+    target_dir.mkdir(parents=True, exist_ok=True)
+    wrapper_bin = target_dir / "andro-cfw"
+    if not wrapper_bin.exists():
+        try:
+            wrapper_content = f'#!/bin/sh\nexec "{sys.executable}" -m andro_cfw.cli "$@"\n'
+            wrapper_bin.write_text(wrapper_content, encoding="utf-8")
+            os.chmod(wrapper_bin, 0o755)
+            log_success(f"Created CLI wrapper at '{wrapper_bin}'.")
+        except Exception:
+            pass
+
     target_str = str(target_dir.resolve())
     current_paths = os.environ.get("PATH", "").split(":")
     if target_str in current_paths or str(target_dir.expanduser()) in current_paths:
@@ -358,5 +380,5 @@ def _add_to_posix_user_path(target_dir: Path) -> bool:
             log_dim(f"Run `source ~/{rc_name}` or restart your terminal.")
         return True
     except Exception as exc:
-        log_error(f"Could not update {rc_file}: {exc}")
+        log_error(f"Could not write to {rc_name}: {exc}")
         return False
