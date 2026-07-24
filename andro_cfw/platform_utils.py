@@ -279,12 +279,16 @@ def add_to_user_path(target_dir: Optional[Path] = None) -> bool:
     if target_dir is None:
         user_bin = Path.home() / ".local" / "bin"
         exec_bin = Path(sys.executable).parent
+        win_scripts = exec_bin / "Scripts"
+
         if (exec_bin / "andro-cfw").exists() or (exec_bin / "andro-cfw.exe").exists():
             target_dir = exec_bin
+        elif (win_scripts / "andro-cfw.exe").exists():
+            target_dir = win_scripts
         elif (user_bin / "andro-cfw").exists() or (user_bin / "andro-cfw.exe").exists():
             target_dir = user_bin
         elif sys_family == "windows":
-            target_dir = exec_bin
+            target_dir = win_scripts if win_scripts.exists() else exec_bin
         else:
             target_dir = user_bin
 
