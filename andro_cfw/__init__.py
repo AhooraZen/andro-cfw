@@ -23,14 +23,16 @@ Run ``andro-cfw init`` once per project to authenticate with Cloudflare and
 deploy the proxy worker.
 """
 
-from .session import CFWSession
-from .errors import AndroCFWError, SessionNotFoundError, DeploymentError
+from .session import CFWSession, WorkerEntry
+from .errors import AndroCFWError, SessionNotFoundError, DeploymentError, ToolchainMissingError
 
 __all__ = [
     "CFWSession",
+    "WorkerEntry",
     "AndroCFWError",
     "SessionNotFoundError",
     "DeploymentError",
+    "ToolchainMissingError",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

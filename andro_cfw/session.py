@@ -4,7 +4,7 @@ import json
 import os
 import stat
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional
 
@@ -38,21 +38,88 @@ def _ensure_key() -> bytes:
 
 
 @dataclass
-class CFWSession:
+class WorkerEntry:
     """
-    Represents a deployed Cloudflare Worker proxy session for a project.
+    One deployed Cloudflare Worker under one Cloudflare account.
 
-    Attributes:
-        worker_name: Name of the deployed Cloudflare Worker.
-        worker_url: Public https://*.workers.dev URL of the worker.
-        account_id: Cloudflare account id the worker was deployed under (optional).
-        created_at: Unix timestamp of creation.
+    exhausted_until: unix timestamp until which this worker is assumed to
+    have hit Cloudflare's daily free-tier request quota (100k req/day).
+    0 means "not currently marked as exhausted". The load balancer sets
+    this to the next UTC midnight the moment it detects a 429 / quota-limit
+    response from this worker, and automatically considers the worker
+    usable again once that timestamp has passed (i.e. after Cloudflare's
+    daily reset) -- no manual action required.
     """
 
     worker_name: str
     worker_url: str
+    account_label: Optional[str] = None
     account_id: Optional[str] = None
+    exhausted_until: float = 0.0
+    last_error: Optional[str] = None
+
+
+@dataclass
+class CFWSession:
+    """
+    Represents one or more deployed Cloudflare Worker proxy sessions for a
+    project, with optional smart multi-account load balancing.
+
+    Single-account projects (the default) behave exactly as before: the
+    Telegram library talks directly to the one workers.dev URL.
+
+    Multi-account projects (created with `andro-cfw init --accounts N`)
+    hold N independent Cloudflare-account workers. In that case, the
+    URLs returned by telebot_api_url()/ptb_base_url()/etc. point at a
+    local load-balancing proxy (started automatically, in-process, the
+    first time it's needed) which:
+      - forwards every request to the currently "active" worker,
+      - instantly detects a 429 / daily-quota-exceeded response,
+      - switches to the next healthy worker/account with zero downtime,
+      - automatically starts using an account again once its daily
+        Cloudflare quota resets (00:00 UTC), cycling back to account #1
+        first once it becomes available again.
+    """
+
+    workers: list = field(default_factory=list)  # list[WorkerEntry]
+    active_index: int = 0
     created_at: float = 0.0
+
+    # Backward-compatible single-worker fields. Kept so existing sessions
+    # created with andro-cfw <0.2.0 keep loading correctly, and so simple
+    # single-account code (`session.worker_name` / `session.worker_url`)
+    # keeps working unchanged.
+    worker_name: Optional[str] = None
+    worker_url: Optional[str] = None
+    account_id: Optional[str] = None
+
+    _lb = None  # lazily-created LoadBalancer instance (not persisted)
+
+    def __post_init__(self):
+        # Normalize dicts (from JSON) into WorkerEntry objects.
+        normalized = []
+        for w in self.workers:
+            if isinstance(w, WorkerEntry):
+                normalized.append(w)
+            elif isinstance(w, dict):
+                normalized.append(WorkerEntry(**w))
+        self.workers = normalized
+
+        # Migrate an old-style single-worker session into the new
+        # `workers` list so both code paths (old attrs + new list) agree.
+        if not self.workers and self.worker_name and self.worker_url:
+            self.workers = [
+                WorkerEntry(
+                    worker_name=self.worker_name,
+                    worker_url=self.worker_url,
+                    account_id=self.account_id,
+                )
+            ]
+
+        if self.workers:
+            active = self.workers[self.active_index % len(self.workers)]
+            self.worker_name = active.worker_name
+            self.worker_url = active.worker_url
 
     # ---------------------------------------------------------------- #
     # Persistence
@@ -63,7 +130,15 @@ class CFWSession:
         target = Path(path) if path else Path.cwd() / DEFAULT_SESSION_FILENAME
         key = _ensure_key()
         fernet = Fernet(key)
-        payload = json.dumps(asdict(self)).encode("utf-8")
+        data = {
+            "workers": [asdict(w) for w in self.workers],
+            "active_index": self.active_index,
+            "created_at": self.created_at,
+            "worker_name": self.worker_name,
+            "worker_url": self.worker_url,
+            "account_id": self.account_id,
+        }
+        payload = json.dumps(data).encode("utf-8")
         token = fernet.encrypt(payload)
         target.write_bytes(token)
         try:
@@ -95,23 +170,64 @@ class CFWSession:
                 "Re-run `andro-cfw init` to regenerate it."
             ) from exc
         data = json.loads(raw.decode("utf-8"))
-        return cls(**data)
+        session = cls(**data)
+        session._session_path = target
+        return session
 
     @classmethod
     def new(cls, worker_name: str, worker_url: str, account_id: Optional[str] = None) -> "CFWSession":
         return cls(
-            worker_name=worker_name,
-            worker_url=worker_url,
-            account_id=account_id,
+            workers=[WorkerEntry(worker_name=worker_name, worker_url=worker_url, account_id=account_id)],
+            active_index=0,
             created_at=time.time(),
         )
+
+    @classmethod
+    def new_multi(cls, entries: list) -> "CFWSession":
+        """Create a session backed by several (worker_name, worker_url, account_label) tuples."""
+        workers = [
+            WorkerEntry(worker_name=n, worker_url=u, account_label=lbl)
+            for (n, u, lbl) in entries
+        ]
+        return cls(workers=workers, active_index=0, created_at=time.time())
+
+    # ---------------------------------------------------------------- #
+    # Load-balancer plumbing (multi-account mode)
+    # ---------------------------------------------------------------- #
+
+    def _persist(self) -> None:
+        """Re-save the session, used by the load balancer to persist
+        exhausted_until timestamps / active_index switches across restarts."""
+        path = getattr(self, "_session_path", None)
+        try:
+            self.save(str(path) if path else None)
+        except Exception:
+            pass
+
+    def _get_load_balancer(self):
+        if len(self.workers) <= 1:
+            return None
+        if self._lb is None:
+            from .loadbalancer import LoadBalancer
+            self._lb = LoadBalancer(self)
+            self._lb.start()
+        return self._lb
 
     # ---------------------------------------------------------------- #
     # Convenience accessors for popular Telegram libraries
     # ---------------------------------------------------------------- #
 
     def api_base_url(self) -> str:
-        """Base URL of the deployed worker, no trailing slash."""
+        """
+        Base URL to point Telegram libraries at, no trailing slash.
+
+        - Single-account sessions: the workers.dev URL directly.
+        - Multi-account sessions: the local smart load-balancer URL,
+          started automatically in this process.
+        """
+        lb = self._get_load_balancer()
+        if lb is not None:
+            return lb.base_url()
         return self.worker_url.rstrip("/")
 
     def telebot_api_url(self) -> str:

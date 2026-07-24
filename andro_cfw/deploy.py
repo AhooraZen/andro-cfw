@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import re
 import secrets
-import shutil
 import subprocess
 import tempfile
 from importlib import resources
 from pathlib import Path
 from typing import Optional
 
+from .auth import _account_env
 from .errors import DeploymentError
 from .toolchain import check_node_toolchain
 
@@ -23,12 +23,17 @@ def _load_template(name: str) -> str:
     return resources.files("andro_cfw.templates").joinpath(name).read_text(encoding="utf-8")
 
 
-def deploy_worker(worker_name: Optional[str] = None) -> tuple[str, str]:
+def deploy_worker(
+    worker_name: Optional[str] = None,
+    account_label: Optional[str] = None,
+) -> tuple[str, str]:
     """
     Build a minimal Cloudflare Worker project in a temp directory and
     deploy it with `wrangler deploy`. Returns (worker_name, worker_url).
 
-    Requires the user to already be authenticated (see auth.cloudflare_login).
+    Requires the user to already be authenticated (see auth.cloudflare_login)
+    -- for the given `account_label` when deploying under a specific
+    isolated Cloudflare account (multi-account load-balancing mode).
     """
     check_node_toolchain()
 
@@ -45,12 +50,14 @@ def deploy_worker(worker_name: Optional[str] = None) -> tuple[str, str]:
             wrangler_tmpl.format(worker_name=worker_name), encoding="utf-8"
         )
 
-        print(f"[andro-cfw] Deploying Cloudflare Worker '{worker_name}'...")
+        label_note = f" (account: {account_label})" if account_label else ""
+        print(f"[andro-cfw] Deploying Cloudflare Worker '{worker_name}'{label_note}...")
         result = subprocess.run(
             ["npx", "--yes", "wrangler", "deploy"],
             cwd=tmp_path,
             capture_output=True,
             text=True,
+            env=_account_env(account_label),
         )
 
         combined_output = result.stdout + "\n" + result.stderr
@@ -76,11 +83,12 @@ def deploy_worker(worker_name: Optional[str] = None) -> tuple[str, str]:
         return worker_name, worker_url
 
 
-def teardown_worker(worker_name: str) -> None:
+def teardown_worker(worker_name: str, account_label: Optional[str] = None) -> None:
     """Delete a previously deployed worker (used by `andro-cfw remove`)."""
     check_node_toolchain()
     subprocess.run(
         ["npx", "--yes", "wrangler", "delete", "--name", worker_name, "--force"],
         capture_output=True,
         text=True,
+        env=_account_env(account_label),
     )
