@@ -142,6 +142,47 @@ def cmd_setup_path(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_check(args: argparse.Namespace) -> int:
+    try:
+        session = CFWSession.load(str(_session_path(args)) if args.path else None)
+    except AndroCFWError as exc:
+        log_error(f"{exc}")
+        return 1
+
+    log_working(f"Testing connectivity to {len(session.workers)} Cloudflare Worker(s)...")
+    results = session.check_health(timeout=args.timeout)
+
+    print()
+    all_ok = True
+    for r in results:
+        label = r["account_label"] or r["worker_name"]
+        if r["status"] == 200:
+            status_str = f"{COLOR_GREEN}HTTP 200 OK{COLOR_RESET}"
+            ping_str = f"{COLOR_CYAN}{r['latency_ms']} ms{COLOR_RESET}"
+        elif r["status"] > 0:
+            status_str = f"{COLOR_YELLOW}HTTP {r['status']}{COLOR_RESET}"
+            ping_str = f"{r['latency_ms']} ms"
+            all_ok = False
+        else:
+            status_str = f"{COLOR_BOLD}\033[1;31mFAILED ({r['error']}){COLOR_RESET}"
+            ping_str = "-"
+            all_ok = False
+
+        state_str = f"{COLOR_YELLOW}[exhausted]{COLOR_RESET}" if r["is_exhausted"] else f"{COLOR_GREEN}[available]{COLOR_RESET}"
+        print(f"  Worker [{r['index']}]: {label}")
+        print(f"    URL     : {r['worker_url']}")
+        print(f"    Status  : {status_str} ({ping_str})")
+        print(f"    Quota   : {state_str}")
+        print()
+
+    if all_ok:
+        log_success("All Cloudflare Worker proxies are healthy and responding!")
+        return 0
+    else:
+        log_warn("One or more workers had connection or status issues.")
+        return 1
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="andro-cfw", description="Run Telegram bots through your own Cloudflare Worker proxy.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -166,6 +207,11 @@ def main(argv=None) -> int:
     p_status = sub.add_parser("status", help="Show info about the current project's worker(s).")
     p_status.add_argument("--path", help="Project directory (default: current directory)")
     p_status.set_defaults(func=cmd_status)
+
+    p_check = sub.add_parser("check", help="Test live network connectivity and ping response times of deployed worker(s).")
+    p_check.add_argument("--path", help="Project directory (default: current directory)")
+    p_check.add_argument("--timeout", type=int, default=5, help="HTTP connection timeout in seconds (default: 5)")
+    p_check.set_defaults(func=cmd_check)
 
     p_remove = sub.add_parser("remove", help="Delete the deployed worker(s) and local session.")
     p_remove.add_argument("--path", help="Project directory (default: current directory)")

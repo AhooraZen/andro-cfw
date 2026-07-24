@@ -255,3 +255,42 @@ class CFWSession:
             "base": self.api_base_url() + "/bot{token}/{method}",
             "file": self.api_base_url() + "/file/bot{token}/{path}",
         }
+
+    def check_health(self, timeout: int = 5) -> list[dict]:
+        """
+        Pings each deployed Cloudflare Worker in this session to measure ping latency,
+        HTTP status, and check daily quota reset status.
+        """
+        import urllib.request
+        import urllib.error
+
+        results = []
+        for i, w in enumerate(self.workers):
+            start = time.time()
+            url = w.worker_url.rstrip("/") + "/"
+            status = 0
+            latency = 0.0
+            error = None
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "andro-cfw-health-check"})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    status = resp.status
+                    latency = (time.time() - start) * 1000
+            except urllib.error.HTTPError as http_err:
+                status = http_err.code
+                latency = (time.time() - start) * 1000
+            except Exception as exc:
+                error = str(exc)
+
+            results.append({
+                "index": i,
+                "worker_name": w.worker_name,
+                "worker_url": w.worker_url,
+                "account_label": w.account_label,
+                "status": status,
+                "latency_ms": round(latency, 1),
+                "is_exhausted": w.exhausted_until > time.time(),
+                "exhausted_until": w.exhausted_until,
+                "error": error,
+            })
+        return results

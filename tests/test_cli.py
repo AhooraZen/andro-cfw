@@ -9,6 +9,7 @@ from andro_cfw.cli import (
     cmd_init,
     cmd_add_account,
     cmd_status,
+    cmd_check,
     cmd_remove,
     main,
 )
@@ -146,6 +147,29 @@ def test_cmd_remove_error(tmp_path):
     with patch("andro_cfw.cli.CFWSession.load", side_effect=SessionNotFoundError("No session")):
         ret = cmd_remove(args)
         assert ret == 1
+
+
+def test_cmd_check(tmp_path):
+    args = argparse.Namespace(path=str(tmp_path), timeout=5)
+    session = CFWSession.new(worker_name="w1", worker_url="https://w1.workers.dev")
+    health_mock = [
+        {
+            "index": 0,
+            "worker_name": "w1",
+            "worker_url": "https://w1.workers.dev",
+            "account_label": None,
+            "status": 200,
+            "latency_ms": 45.2,
+            "is_exhausted": False,
+            "exhausted_until": 0,
+            "error": None,
+        }
+    ]
+
+    with patch("andro_cfw.cli.CFWSession.load", return_value=session), \
+         patch.object(session, "check_health", return_value=health_mock):
+        ret = cmd_check(args)
+        assert ret == 0
 
 
 def test_main_cli():
