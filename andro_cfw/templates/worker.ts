@@ -9,6 +9,7 @@
 export interface Env {
   BOT_TOKEN?: string;
   SECRET_TOKEN?: string;
+  FORWARD_WEBHOOK_URL?: string;
 }
 
 const TELEGRAM_ORIGIN = "https://api.telegram.org";
@@ -60,6 +61,16 @@ export default {
         }
 
         const update = (await request.json()) as any;
+
+        // If a custom downstream webhook backend URL is configured, forward the update payload to it
+        if (env.FORWARD_WEBHOOK_URL) {
+          await fetch(env.FORWARD_WEBHOOK_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(update),
+          });
+        }
+
         if (update && update.message && update.message.text && token) {
           const chatId = update.message.chat.id;
           const text = update.message.text.trim();
