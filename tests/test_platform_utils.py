@@ -292,3 +292,18 @@ def test_add_to_posix_user_path_append_rc(tmp_path):
         content = rc_file.read_text()
         assert str(target_dir.resolve()) in content
 
+
+def test_add_to_posix_user_path_creates_executable_wrapper(tmp_path):
+    target_dir = tmp_path / ".local" / "bin"
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    with patch.dict("os.environ", {"PATH": "/usr/bin", "SHELL": "/bin/zsh"}), \
+         patch("pathlib.Path.home", return_value=fake_home):
+        assert _add_to_posix_user_path(target_dir) is True
+        wrapper = target_dir / "andro-cfw"
+        assert wrapper.exists()
+        content = wrapper.read_text()
+        assert "#!/bin/sh" in content
+        assert "exec" in content
+

@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from .auth import cloudflare_login
-from .colors import log_info, log_working, log_success, log_error, log_warn, COLOR_GREEN, COLOR_RESET, COLOR_BOLD, COLOR_CYAN
+from .colors import (
+    log_info, log_working, log_success, log_error, log_warn, log_notice,
+    COLOR_GREEN, COLOR_RESET, COLOR_BOLD, COLOR_CYAN, COLOR_BLUE, COLOR_RED, ColoredHelpFormatter
+)
 from .deploy import deploy_worker, teardown_worker
 from .errors import AndroCFWError
 from .platform_utils import add_to_user_path
@@ -111,7 +115,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"Mode        : multi-account load balancing ({len(session.workers)} accounts)")
         for i, w in enumerate(session.workers):
             marker = " <- active" if i == session.active_index else ""
-            state = "exhausted (waiting for daily reset)" if w.exhausted_until > __import__("time").time() else "available"
+            state = "exhausted (waiting for daily reset)" if w.exhausted_until > time.time() else "available"
             print(f"  [{i}] {w.account_label}: {w.worker_name} -> {w.worker_url} [{state}]{marker}")
     else:
         print(f"Worker name : {session.worker_name}")
@@ -324,10 +328,14 @@ def cmd_snippet(args: argparse.Namespace) -> int:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="andro-cfw", description="Run Telegram bots through your own Cloudflare Worker proxy.")
+    parser = argparse.ArgumentParser(
+        prog="andro-cfw",
+        description=f"{COLOR_BOLD}{COLOR_CYAN}andro-cfw{COLOR_RESET} - Run Telegram bots through your own Cloudflare Worker proxy.",
+        formatter_class=ColoredHelpFormatter,
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init", help="Log into Cloudflare and deploy the proxy worker(s) for this project.")
+    p_init = sub.add_parser("init", help="Log into Cloudflare and deploy the proxy worker(s) for this project.", formatter_class=ColoredHelpFormatter)
     p_init.add_argument("--name", help="Custom worker name (default: random andro-cfw-xxxxxxxx)")
     p_init.add_argument("--path", help="Project directory (default: current directory)")
     p_init.add_argument("--force", action="store_true", help="Overwrite an existing cfw.session")
@@ -339,30 +347,30 @@ def main(argv=None) -> int:
     )
     p_init.set_defaults(func=cmd_init)
 
-    p_add = sub.add_parser("add-account", help="Add one more Cloudflare account/worker to an existing load-balanced session.")
+    p_add = sub.add_parser("add-account", help="Add one more Cloudflare account/worker to an existing load-balanced session.", formatter_class=ColoredHelpFormatter)
     p_add.add_argument("--name", help="Base name for the new worker")
     p_add.add_argument("--path", help="Project directory (default: current directory)")
     p_add.set_defaults(func=cmd_add_account)
 
-    p_status = sub.add_parser("status", help="Show info about the current project's worker(s).")
+    p_status = sub.add_parser("status", help="Show info about the current project's worker(s).", formatter_class=ColoredHelpFormatter)
     p_status.add_argument("--path", help="Project directory (default: current directory)")
     p_status.set_defaults(func=cmd_status)
 
-    p_check = sub.add_parser("check", help="Test live network connectivity and ping response times of deployed worker(s).")
+    p_check = sub.add_parser("check", help="Test live network connectivity and ping response times of deployed worker(s).", formatter_class=ColoredHelpFormatter)
     p_check.add_argument("--path", help="Project directory (default: current directory)")
     p_check.add_argument("--timeout", type=int, default=5, help="HTTP connection timeout in seconds (default: 5)")
     p_check.set_defaults(func=cmd_check)
 
-    p_snippet = sub.add_parser("snippet", help="Generate ready-to-run Python code for telebot, ptb, aiogram, pyrogram, or hydrogram.")
+    p_snippet = sub.add_parser("snippet", help="Generate ready-to-run Python code for telebot, ptb, aiogram, pyrogram, or hydrogram.", formatter_class=ColoredHelpFormatter)
     p_snippet.add_argument("--framework", "-f", default="telebot", choices=["telebot", "ptb", "aiogram", "pyrogram", "hydrogram"], help="Framework name (default: telebot)")
     p_snippet.add_argument("--out", "-o", help="Optional output file path to write code to (e.g. bot.py)")
     p_snippet.set_defaults(func=cmd_snippet)
 
-    p_remove = sub.add_parser("remove", help="Delete the deployed worker(s) and local session.")
+    p_remove = sub.add_parser("remove", help="Delete the deployed worker(s) and local session.", formatter_class=ColoredHelpFormatter)
     p_remove.add_argument("--path", help="Project directory (default: current directory)")
     p_remove.set_defaults(func=cmd_remove)
 
-    p_path = sub.add_parser("setup-path", help="Safely add andro-cfw's executable folder to your User PATH.")
+    p_path = sub.add_parser("setup-path", help="Safely add andro-cfw's executable folder to your User PATH.", formatter_class=ColoredHelpFormatter)
     p_path.set_defaults(func=cmd_setup_path)
 
     args = parser.parse_args(argv)
