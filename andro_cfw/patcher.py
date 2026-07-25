@@ -40,4 +40,16 @@ def patch(session: Optional[CFWSession] = None) -> CFWSession:
         if hasattr(hyd, "Client"):
             hyd.Client.api_url = base_url
 
+    # 4. aiogram (v2 & v3)
+    if "aiogram" in sys.modules:
+        aio = sys.modules["aiogram"]
+        if hasattr(aio, "client") and hasattr(aio.client, "telegram") and hasattr(aio.client.telegram, "TelegramAPIServer"):
+            aio.client.telegram.TelegramAPIServer.from_base(session.telebot_api_url())
+
+    # 5. python-telegram-bot (telegram)
+    if "telegram" in sys.modules:
+        tg = sys.modules["telegram"]
+        if hasattr(tg, "Bot") and hasattr(tg.Bot, "_base_url"):
+            tg.Bot._base_url = base_url
+
     return session

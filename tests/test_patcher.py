@@ -36,3 +36,33 @@ def test_patch_pyrogram(monkeypatch):
     res = patch(mock_session)
     assert res is mock_session
     assert mock_pyrogram.Client.api_url == "https://test.workers.dev"
+
+
+def test_patch_aiogram(monkeypatch):
+    mock_session = CFWSession(
+        worker_name="test-worker",
+        worker_url="https://test.workers.dev",
+        workers=[WorkerEntry("test-worker", "https://test.workers.dev", "acc1")],
+    )
+
+    mock_aiogram = MagicMock()
+    monkeypatch.setitem(sys.modules, "aiogram", mock_aiogram)
+
+    res = patch(mock_session)
+    assert res is mock_session
+    assert mock_aiogram.client.telegram.TelegramAPIServer.from_base.called
+
+
+def test_patch_telegram(monkeypatch):
+    mock_session = CFWSession(
+        worker_name="test-worker",
+        worker_url="https://test.workers.dev",
+        workers=[WorkerEntry("test-worker", "https://test.workers.dev", "acc1")],
+    )
+
+    mock_telegram = MagicMock()
+    monkeypatch.setitem(sys.modules, "telegram", mock_telegram)
+
+    res = patch(mock_session)
+    assert res is mock_session
+    assert mock_telegram.Bot._base_url == "https://test.workers.dev"
