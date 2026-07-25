@@ -21,28 +21,34 @@ export default {
       return new Response("andro-cfw proxy & serverless engine is running.", { status: 200 });
     }
 
-    // Serverless Webhook Handler (POST /webhook)
-    if (request.method === "POST" && (url.pathname === "/webhook" || url.pathname.endsWith("/webhook"))) {
+    // Serverless Webhook Handler (POST /webhook or /webhook?token=... or /webhook/...token...)
+    if (request.method === "POST" && url.pathname.includes("/webhook")) {
       try {
+        let token = url.searchParams.get("token") || env.BOT_TOKEN;
+        if (!token) {
+          const parts = url.pathname.split("/").filter(Boolean);
+          const idx = parts.indexOf("webhook");
+          if (idx !== -1 && parts.length > idx + 1) {
+            token = parts[idx + 1];
+          }
+        }
+
         const update = (await request.json()) as any;
-        if (update && update.message && update.message.text) {
+        if (update && update.message && update.message.text && token) {
           const chatId = update.message.chat.id;
           const text = update.message.text;
 
           if (text.startsWith("/start") || text.startsWith("/help")) {
-            const token = env.BOT_TOKEN;
-            if (token) {
-              const replyUrl = `${TELEGRAM_ORIGIN}/bot${token}/sendMessage`;
-              await fetch(replyUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  chat_id: chatId,
-                  text: "🤖 *I'm Useless*\n\n⚡ *Response Latency*: `~5 ms` (100% Serverless Edge)\n🌐 *Host*: Cloudflare Worker\n🔒 *Uptime*: 24/7 (No laptop/server required)",
-                  parse_mode: "Markdown",
-                }),
-              });
-            }
+            const replyUrl = `${TELEGRAM_ORIGIN}/bot${token}/sendMessage`;
+            await fetch(replyUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: chatId,
+                text: "🤖 *I'm Useless*\n\n⚡ *Response Latency*: `~5 ms` (100% Serverless Edge)\n🌐 *Host*: Cloudflare Worker\n🔒 *Uptime*: 24/7 (No laptop/server required)",
+                parse_mode: "Markdown",
+              }),
+            });
           }
         }
       } catch (err) {

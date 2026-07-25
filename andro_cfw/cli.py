@@ -361,15 +361,16 @@ def cmd_deploy_serverless(args: argparse.Namespace) -> int:
     if bot_file and Path(bot_file).exists():
         log_info(f"Detected bot script at '{bot_file}'.")
 
+    import urllib.parse
     worker_url = session.worker_url.rstrip("/")
-    webhook_url = f"{worker_url}/webhook"
-    telegram_set_webhook_url = f"https://api.telegram.org/bot{token}/setWebhook?url={webhook_url}"
+    webhook_url = f"{worker_url}/webhook?token={token}"
+    telegram_set_webhook_url = f"https://api.telegram.org/bot{token}/setWebhook?url={urllib.parse.quote(webhook_url, safe='')}"
 
     log_working("Registering 100% Serverless Webhook on Cloudflare Edge...")
 
     # Attempt automatic Webhook registration through the worker proxy itself
     import urllib.request
-    proxy_webhook_req = f"{worker_url}/bot{token}/setWebhook?url={webhook_url}"
+    proxy_webhook_req = f"{worker_url}/bot{token}/setWebhook?url={urllib.parse.quote(webhook_url, safe='')}"
     registered = False
     try:
         req = urllib.request.Request(proxy_webhook_req, headers={"User-Agent": "andro-cfw"})
