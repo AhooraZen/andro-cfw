@@ -23,6 +23,10 @@ def patch(session: Optional[CFWSession] = None) -> CFWSession:
         tb = sys.modules["telebot"]
         tb.apihelper.API_URL = session.telebot_api_url()
         tb.apihelper.FILE_URL = session.telebot_file_url()
+        if hasattr(tb.apihelper, "READ_TIMEOUT"):
+            tb.apihelper.READ_TIMEOUT = 60
+        if hasattr(tb.apihelper, "CUSTOM_REQUEST_TIMEOUT"):
+            tb.apihelper.CUSTOM_REQUEST_TIMEOUT = (10, 60)
 
     # 2. Pyrogram
     if "pyrogram" in sys.modules:
