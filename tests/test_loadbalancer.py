@@ -41,13 +41,13 @@ def test_loadbalancer_worker_selection():
     assert lb._pick_active_worker() == 0
 
 
-def test_loadbalancer_mark_exhausted():
+def test_loadbalancer_mark_exhausted(tmp_path):
     workers = [
         WorkerEntry("w1", "https://w1.workers.dev", "acc1"),
         WorkerEntry("w2", "https://w2.workers.dev", "acc2"),
     ]
     session = CFWSession(workers=workers)
-    session._session_path = MagicMock()
+    session._session_path = tmp_path / "cfw.session"
     lb = LoadBalancer(session)
 
     with patch.object(session, "_persist") as mock_persist:
@@ -125,13 +125,13 @@ def test_proxy_request_success():
         handler.send_response.assert_called_with(200)
 
 
-def test_proxy_request_connection_error_failover():
+def test_proxy_request_connection_error_failover(tmp_path):
     workers = [
         WorkerEntry("w1", "https://w1.workers.dev", "acc1"),
         WorkerEntry("w2", "https://w2.workers.dev", "acc2"),
     ]
     session = CFWSession(workers=workers)
-    session._session_path = MagicMock()
+    session._session_path = tmp_path / "cfw.session"
     lb = LoadBalancer(session)
 
     handler = MagicMock()
@@ -145,13 +145,13 @@ def test_proxy_request_connection_error_failover():
         handler.send_response.assert_called_with(200)
 
 
-def test_proxy_request_quota_failover_and_all_exhausted():
+def test_proxy_request_quota_failover_and_all_exhausted(tmp_path):
     workers = [
         WorkerEntry("w1", "https://w1.workers.dev", "acc1"),
         WorkerEntry("w2", "https://w2.workers.dev", "acc2"),
     ]
     session = CFWSession(workers=workers)
-    session._session_path = MagicMock()
+    session._session_path = tmp_path / "cfw.session"
     lb = LoadBalancer(session)
 
     handler = MagicMock()
@@ -165,3 +165,19 @@ def test_proxy_request_quota_failover_and_all_exhausted():
         assert workers[0].exhausted_until > time.time()
         assert workers[1].exhausted_until > time.time()
         handler.send_response.assert_called_with(429)
+
+
+def test_proxy_request_invalid_content_length():
+    workers = [WorkerEntry("w1", "https://w1.workers.dev", "acc1")]
+    session = CFWSession(workers=workers)
+    lb = LoadBalancer(session)
+
+    handler = MagicMock()
+    handler.headers = {"Content-Length": "invalid_string_header"}
+    handler.path = "/bot123/getMe"
+    handler.command = "GET"
+
+    with patch.object(lb, "_forward", return_value=(200, {}, b"ok")):
+        lb._proxy_request(handler)
+        handler.send_response.assert_called_with(200)
+

@@ -25,6 +25,7 @@ deploy the proxy worker.
 
 from .session import CFWSession, WorkerEntry
 from .errors import AndroCFWError, SessionNotFoundError, DeploymentError, ToolchainMissingError
+from .patcher import patch
 
 __all__ = [
     "CFWSession",
@@ -33,6 +34,7 @@ __all__ = [
     "SessionNotFoundError",
     "DeploymentError",
     "ToolchainMissingError",
+    "patch",
 ]
 
 __version__ = "0.2.1"

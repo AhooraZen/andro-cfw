@@ -132,11 +132,12 @@ def test_cfw_session_persist(tmp_path):
 
 def test_check_health():
     session = CFWSession.new(worker_name="w1", worker_url="https://w1.workers.dev")
+    mock_conn = MagicMock()
     mock_resp = MagicMock()
     mock_resp.status = 200
-    mock_resp.__enter__.return_value = mock_resp
+    mock_conn.getresponse.return_value = mock_resp
 
-    with patch("urllib.request.urlopen", return_value=mock_resp):
+    with patch("http.client.HTTPSConnection", return_value=mock_conn):
         res = session.check_health()
         assert len(res) == 1
         assert res[0]["status"] == 200

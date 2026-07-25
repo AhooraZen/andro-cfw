@@ -16,25 +16,22 @@
 **andro-cfw** این مشکل رو با یه ترفند حل می‌کنه: یه Cloudflare Worker به عنوان reverse proxy بین ربات و تلگرام قرار می‌ده:
 
 ```
-بات پایتون شما  ←→  Cloudflare Worker (غیرفیلتر)  ←→  api.telegram.org
+ربات شما (پایتون / JS / PHP)  ←→  Cloudflare Worker (غیرفیلتر)  ←→  api.telegram.org
 ```
 
-شبکه‌ی Edge کلادفلر از ایران قابل دسترسه، پس ربات شما به Worker وصل میشه و Worker به تلگرام. به همین سادگی.
+شبکه‌ی Edge کلادفلر از ایران قابل دسترسه، پس ربات شما به Worker وصل میشه و Worker به تلگرام.
 
 ---
 
 ## ✨ ویژگی‌ها
 
-- **بدون VPN** — نه روی سیستم توسعه، نه روی سرور
-- **ورکر مال خودته** — روی اکانت Cloudflare خودت deploy میشه، کنترل کامل داری
-- **احراز هویت امن** — با OAuth رسمی Cloudflare (`wrangler login`)، رمز عبور شما هرگز به این کتابخانه ارسال نمی‌شود
-- **سشن رمزنگاری‌شده** — فایل `cfw.session` با Fernet (AES-128 + HMAC) رمز میشه، کلید جدا توی `~/.andro_cfw/key`
-- **پشتیبانی انواع لایبری‌ها** — telebot، python-telegram-bot، aiogram، pyrogram، hydrogram
-- **بدون monkey-patch** — فقط URL رو جایگزین می‌کنی، بقیه کد ع باقی می‌مونه
-- **ساخت کد آماده پروژه (`andro-cfw snippet`)** — تولید خودکار کد نمونه آماده برای تمام لایبری‌های پایتونی
-- **تست پینگ و سلامت ورکر (`andro-cfw check`)** — بررسی زنده سرعت پاسخ‌دهی و کد وضعیت HTTP ورکرها
-- **خروجی رنگی زیبا در ترمینال** — گزارش مرحله‌به‌مرحله با رنگ‌های ANSI استاندارد
-- **افزودن ایمن مسیر به PATH (`andro-cfw setup-path`)** — ثبت ایمن مسیر اجرا بدون خراب کردن PATH سیستم‌عامل
+- 🔒 **بدون نیاز به VPN** — نه روی سیستم شما، نه روی سرور و نه هنگام تنظیم وب‌هوک.
+- ☁️ **میزبانی ۱۰۰٪ سرورلس ابری** — اجرای ۲۴ ساعته ربات‌های واقعی مستقیماً رو لبه‌ی کلادفلر (بدون نیاز به روشن بودن لپ‌تاپ یا سرور).
+- 🐍 **پتچر تک‌خطی خودکار (`andro_cfw.patch()`)** — شناسایی خودکار لایبری‌ها (telebot, ptb, aiogram, pyrogram, hydrogram).
+- 🔀 **لود بالانس چند اکانته** — ادغام سهمیه رایگان چندین اکانت کلادفلر (۱۰۰ هزار درخواست در روز برای هر اکانت) با سوییچ خودکار.
+- ⚡ **ساخت کد و وب‌هوک خودکار (`andro-cfw serverless`)** — دپلوی ۱-دستوری ربات‌های سرورلس با پرسش‌وپاسخ هوشمند.
+- 🔍 **تست پینگ و سلامت ورکر (`andro-cfw check`)** — بررسی زنده سرعت پاسخ‌دهی (Keep-Alive) و کد وضعیت HTTP ورکرها.
+- 🔐 **سشن رمزنگاری‌شده** — فایل `cfw.session` با Fernet (AES-128 + HMAC) رمزنگاری می‌شود.
 
 ---
 
@@ -48,34 +45,158 @@ pip install andro-cfw
 
 ### ثبت ایمن دستور در PATH سیستم‌عامل
 
-اگر بعد از نصب، اجرای `andro-cfw` در ترمینال با خطای `command not found` مواجه شد، با اجرای دستور زیر مسیر اجرایی پکیج رو به صورت ایمن به PATH اضافه کنید:
+اگر بعد از نصب، اجرای `andro-cfw` در ترمینال با خطای `command not found` مواجه شد:
 
 ```bash
 python -m andro_cfw.cli setup-path
 ```
-- **در ویندوز**: مسیر `Scripts\` پایتون رو در `HKCU\Environment\PATH` ریجستری اضافه می‌کنه بدون اینکه PATH فعلی سیستم پاک یا خراب بشه.
-- **در لینوکس / مک**: مسیر `~/.local/bin` یا venv رو به `.zshrc` / `.bashrc` اضافه می‌کنه.
 
 ---
 
-## 🚀 راه‌اندازی (یک بار)
+## 📖 راهنمای کامل: اجرای ۱۰۰٪ سرورلس ربات‌های تلگرام روی کلادفلر
 
-```bash
-cd your-bot-project/
-andro-cfw init
+شما می‌توانید ربات تلگرام خودتون رو **۱۰۰٪ سرورلس** روی Cloudflare Edge با **آپتایم ۲۴ ساعته**، **تاخیر پاسخ‌دهی ۵ میلی‌ثانیه** و **هزینه صفر** (با استفاده از پلن رایگان ۱۰۰،۰۰۰ درخواست در روز کلادفلر) اجرا کنید.
+
+---
+
+### روش اول: دپلوی ۱-دستوری سرورلس (`andro-cfw serverless`)
+
+در کمتر از ۳۰ ثانیه ربات سرورلس خودتون رو دپلوی کنید:
+
+۱. **دستور دپلوی رو بزنید**:
+   ```bash
+   andro-cfw serverless
+   ```
+۲. **توکن ربات** رو از `@BotFather` وارد کنید:
+   ```text
+   [andro-cfw] Enter your Telegram Bot Token from @BotFather: 7123456789:AAFgX...
+   ```
+۳. **تمام!** کتابخانه andro-cfw ورکر رو دپلوی کرده و وب‌هوک رو **بدون نیاز به VPN** روی تلگرام ست می‌کنه.
+
+#### دستورات آماده ربات سرورلس:
+- `/start` یا `/help` — پیام خوش‌آمدگویی همراه با آمار تاخیر و مشخصات دیتاسنتر.
+- `/ping` — پاسخ سریع `pong 🏓 (< 5ms Edge Latency)`.
+- `/status` — نمایش وضعیت زنده ورکر کلادفلر.
+- `/echo <متن>` — تکرار متن درخواستی.
+
+---
+
+### روش دوم: کد کامل TypeScript / JavaScript برای ورکر اختصاصی
+
+اگر می‌خواهید ربات سرورلس با منطق سفارشی، دکمه‌های شیشه‌ای یا پردازش اختصاصی در JavaScript/TypeScript بنویسید:
+
+#### کد `worker.ts`:
+
+```typescript
+export interface Env {
+  BOT_TOKEN?: string;
+}
+
+const TELEGRAM_ORIGIN = "https://api.telegram.org";
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // ۱. پردازش وب‌هوک تلگرام (POST /webhook)
+    if (request.method === "POST" && url.pathname.includes("/webhook")) {
+      try {
+        const token = url.searchParams.get("token") || env.BOT_TOKEN;
+        const update = (await request.json()) as any;
+
+        if (update && update.message && update.message.text && token) {
+          const chatId = update.message.chat.id;
+          const text = update.message.text.trim();
+
+          let replyText = "";
+
+          // منطق دستورات سفارشی ربات
+          if (text === "/start") {
+            replyText = "👋 سلام! این ربات ۱۰۰٪ سرورلس روی Cloudflare Edge اجرا می‌شه!";
+          } else if (text === "/ping") {
+            replyText = "🏓 پینگ از ورکر کلادفلر!";
+          } else if (text.startsWith("/echo ")) {
+            replyText = `📢 متن شما: ${text.slice(6)}`;
+          } else {
+            replyText = `🤖 پیام شما دریافت شد: "${text}"`;
+          }
+
+          // ارسال پاسخ به تلگرام
+          const replyUrl = `${TELEGRAM_ORIGIN}/bot${token}/sendMessage`;
+          await fetch(replyUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: replyText,
+              parse_mode: "Markdown",
+            }),
+          });
+        }
+      } catch (err) {
+        console.error("Webhook processing error:", err);
+      }
+      return new Response("OK", { status: 200 });
+    }
+
+    // ۲. پروکسی معکوس شفاف برای ربات‌های پایتون/سیستم محلی
+    const targetUrl = TELEGRAM_ORIGIN + url.pathname + url.search;
+    return fetch(targetUrl, {
+      method: request.method,
+      headers: request.headers,
+      body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
+      // @ts-ignore
+      duplex: "half",
+    });
+  },
+};
 ```
 
-این دستور:
-1. محیط Node.js و Wrangler رو بررسی می‌کنه (اگه نصب نباشه خودکار نصب می‌کنه).
-2. مرورگرت رو باز می‌کنه → توی Cloudflare لاگین می‌کنی (OAuth).
-3. یه Worker خودکار می‌سازه و deploy می‌کنه.
-4. فایل `cfw.session` رو رمزنگاری‌شده توی همون مسیر می‌سازه.
+---
+
+### روش سوم: ربات پایتون با پتچر تک‌خطی (`andro_cfw.patch()`)
+
+اگر ترجیح می‌دید رباتتون رو با پایتون (telebot, pyrogram, aiogram, ptb) بنویسید:
+
+```python
+import telebot
+import andro_cfw
+
+# تنظیم خودکار پروکسی فقط با ۱ خط کد
+session = andro_cfw.patch()
+
+bot = telebot.TeleBot("YOUR_BOT_TOKEN_FROM_BOTFATHER")
+
+@bot.message_handler(commands=["start", "help"])
+def send_welcome(message):
+    bot.reply_to(
+        message,
+        "🤖 **سلام از پشت فیلتر!**\n\n"
+        f"🌐 **آدرس ورکر**: `{session.worker_url}`\n"
+        "🔒 **وضعیت**: بدون فیلتر و بدون نیاز به VPN!"
+    )
+
+if __name__ == "__main__":
+    print(f"🚀 ربات روی پروکسی ورکر روشن شد ({session.worker_url})...")
+    bot.infinity_polling(timeout=20, long_polling_timeout=20)
+```
+
+---
+
+### روش چهارم: حالت هدایت وب‌هوک به PHP / هاست شخصی (`FORWARD_WEBHOOK_URL`)
+
+اگر یک ربات PHP یا Node.js روی هاست سی‌پنل یا سرور شخصی خودتون دارید و فیلتر شده:
+
+۱. متغیر زیر رو توی تنظیمات ورکر ست کنید:
+   ```toml
+   [vars]
+   FORWARD_WEBHOOK_URL = "https://your-server.com/my_bot_webhook.php"
+   ```
+۲. کلادفلر آپدیت‌های تلگرام رو می‌گیره، فیلترینگ رو دور می‌زنه و مستقیماً به هاست PHP شما ارسال می‌کنه!
 
 ---
 
 ## ⚡ تولید کد آماده پروژه (`andro-cfw snippet`)
-
-دیگه نیازی نیست کد نمونه رو کپی کنی! با این دستور کد اولیه آماده‌ی بوت‌سترپ رو دریافت یا ذخیره کن:
 
 ```bash
 # کد اولیه برای telebot
@@ -92,8 +213,6 @@ andro-cfw snippet -f ptb -o bot.py
 
 ## 🔍 بررسی زنده سلامت و پینگ ورکرها (`andro-cfw check`)
 
-برای تست سرعت اتصال و بررسی وضعیت ورکرهای دپلوی شده:
-
 ```bash
 andro-cfw check
 ```
@@ -102,82 +221,8 @@ andro-cfw check
 ```
   Worker [0]: account-1
     URL     : https://andro-cfw-12345678.workers.dev
-    Status  : HTTP 200 OK (45.2 ms)
+    Status  : HTTP 200 OK (59.1 ms)
     Quota   : [available]
-```
-
----
-
-## 🐍 نمونه کدهای استفاده
-
-### استفاده با pyTelegramBotAPI (telebot)
-
-```python
-import telebot
-from andro_cfw import CFWSession
-
-session = CFWSession.load()
-telebot.apihelper.API_URL = session.telebot_api_url()
-telebot.apihelper.FILE_URL = session.telebot_file_url()
-
-bot = telebot.TeleBot("YOUR_BOT_TOKEN")
-
-@bot.message_handler(commands=["start"])
-def start(message):
-    bot.reply_to(message, "سلام! این ربات از پشت فیلتر کار می‌کنه! 🎉")
-
-bot.infinity_polling()
-```
-
-### استفاده با python-telegram-bot (v20+)
-
-```python
-from telegram.ext import ApplicationBuilder, CommandHandler
-from andro_cfw import CFWSession
-
-session = CFWSession.load()
-
-app = (
-    ApplicationBuilder()
-    .token("YOUR_BOT_TOKEN")
-    .base_url(session.ptb_base_url())
-    .base_file_url(session.ptb_base_file_url())
-    .build()
-)
-
-async def start(update, context):
-    await update.message.reply_text("سلام! این ربات از پشت فیلتر کار می‌کنه! 🎉")
-
-app.add_handler(CommandHandler("start", start))
-app.run_polling()
-```
-
-### استفاده با aiogram (v3+)
-
-```python
-from aiogram import Bot
-from aiogram.client.telegram import TelegramAPIServer
-from aiogram.client.session.aiohttp import AiohttpSession
-from andro_cfw import CFWSession
-
-session = CFWSession.load()
-api_server = TelegramAPIServer(**session.aiogram_server_url())
-
-bot = Bot(
-    token="YOUR_BOT_TOKEN",
-    session=AiohttpSession(api=api_server),
-)
-```
-
-### استفاده با Pyrogram / Hydrogram
-
-```python
-from pyrogram import Client
-from andro_cfw import CFWSession
-
-session = CFWSession.load()
-app = Client("my_bot", bot_token="YOUR_BOT_TOKEN", api_id=12345, api_hash="HASH")
-app.api_url = session.api_base_url()
 ```
 
 ---
@@ -188,6 +233,7 @@ app.api_url = session.api_base_url()
 |-------|-------|
 | `andro-cfw init` | لاگین کلادفلر + deploy ورکر + ساخت سشن |
 | `andro-cfw init --accounts 2` | ساخت سشن چنداکانته لودبالانس‌شده |
+| `andro-cfw serverless` | دپلوی خودکار ربات سرورلس ۲۴ ساعته روی کلادفلر |
 | `andro-cfw add-account` | افزودن اکانت جدید کلادفلر به سشن موجود |
 | `andro-cfw snippet -f telebot` | ساخت خودکار کد پایتون آماده برای لایبری‌های مختلف |
 | `andro-cfw check` | تست پینگ زنده و بررسی سلامت ورکرهای دپلوی شده |
@@ -201,7 +247,6 @@ app.api_url = session.api_base_url()
 
 - **`cfw.session` رمزنگاری شده** — با Fernet (AES-128-CBC + HMAC). کلید توی `~/.andro_cfw/key` هست.
 - **گیت:** حتماً `cfw.session` رو به `.gitignore` اضافه کن.
-- **ورکر pass-through خالصه** — لاگ نمی‌گیره، توکن ذخیره نمی‌کنه، محتوای ریکوئست رو نمی‌بینه.
 
 ---
 

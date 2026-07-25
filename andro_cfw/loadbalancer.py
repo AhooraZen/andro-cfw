@@ -150,7 +150,10 @@ class LoadBalancer:
     # ------------------------------------------------------------ #
 
     def _proxy_request(self, handler: BaseHTTPRequestHandler) -> None:
-        content_length = int(handler.headers.get("Content-Length", 0) or 0)
+        try:
+            content_length = int(handler.headers.get("Content-Length", 0) or 0)
+        except (ValueError, TypeError):
+            content_length = 0
         body = handler.rfile.read(content_length) if content_length else None
 
         tried_indices = set()

@@ -261,24 +261,32 @@ class CFWSession:
         Pings each deployed Cloudflare Worker in this session to measure ping latency,
         HTTP status, and check daily quota reset status.
         """
-        import urllib.request
-        import urllib.error
+        import http.client
+        import urllib.parse
 
         results = []
         for i, w in enumerate(self.workers):
-            start = time.time()
-            url = w.worker_url.rstrip("/") + "/"
             status = 0
             latency = 0.0
             error = None
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "andro-cfw-health-check"})
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    status = resp.status
-                    latency = (time.time() - start) * 1000
-            except urllib.error.HTTPError as http_err:
-                status = http_err.code
+                parsed = urllib.parse.urlparse(w.worker_url)
+                host = parsed.netloc or w.worker_url.replace("https://", "").replace("http://", "").split("/")[0]
+                conn = http.client.HTTPSConnection(host, timeout=timeout)
+
+                # Warmup TCP+TLS connection
+                conn.request("GET", "/", headers={"User-Agent": "andro-cfw-health-check"})
+                resp1 = conn.getresponse()
+                resp1.read()
+
+                # Measure true Keep-Alive latency
+                start = time.time()
+                conn.request("GET", "/", headers={"User-Agent": "andro-cfw-health-check"})
+                resp2 = conn.getresponse()
+                resp2.read()
                 latency = (time.time() - start) * 1000
+                status = resp2.status
+                conn.close()
             except Exception as exc:
                 error = str(exc)
 

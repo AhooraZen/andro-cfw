@@ -351,7 +351,8 @@ def _add_to_posix_user_path(target_dir: Path) -> bool:
     # Ensure a command wrapper exists in target_dir so andro-cfw runs from anywhere
     target_dir.mkdir(parents=True, exist_ok=True)
     wrapper_bin = target_dir / "andro-cfw"
-    if not wrapper_bin.exists():
+    is_pipx = "pipx" in str(sys.executable)
+    if not wrapper_bin.exists() and not wrapper_bin.is_symlink() and not is_pipx:
         try:
             wrapper_content = f'#!/bin/sh\nexec "{sys.executable}" -m andro_cfw.cli "$@"\n'
             wrapper_bin.write_text(wrapper_content, encoding="utf-8")
