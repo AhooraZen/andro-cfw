@@ -374,8 +374,16 @@ def main(argv=None) -> int:
     p_path.set_defaults(func=cmd_setup_path)
 
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except KeyboardInterrupt:
+        log_warn("\nOperation cancelled by user.")
+        return 130
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        log_warn("\nOperation cancelled by user.")
+        sys.exit(130)

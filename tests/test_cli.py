@@ -187,3 +187,10 @@ def test_main_cli():
         ret = main(["status"])
         assert ret == 0
         mock_cmd.assert_called_once()
+
+
+def test_main_cli_keyboard_interrupt():
+    with patch("andro_cfw.cli.cmd_status", side_effect=KeyboardInterrupt()):
+        ret = main(["status"])
+        assert ret == 130
+
