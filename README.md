@@ -15,6 +15,7 @@ In countries like Iran where `api.telegram.org` is network-filtered, developers 
 
 **andro-cfw** solves this with a simple trick: it deploys a Cloudflare Worker as a reverse proxy between your bot and Telegram:
 
+
 ```
 Your Bot (Python / JS / PHP)  ←→  Cloudflare Worker (unfiltered)  ←→  api.telegram.org
 ```
