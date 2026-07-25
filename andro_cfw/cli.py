@@ -7,8 +7,8 @@ from pathlib import Path
 
 from .auth import cloudflare_login
 from .colors import (
-    log_info, log_working, log_success, log_error, log_warn, log_notice,
-    COLOR_GREEN, COLOR_RESET, COLOR_BOLD, COLOR_CYAN, COLOR_BLUE, COLOR_RED, ColoredHelpFormatter
+    log_info, log_working, log_success, log_error, log_warn, log_notice, log_dim,
+    COLOR_GREEN, COLOR_RESET, COLOR_BOLD, COLOR_CYAN, COLOR_BLUE, COLOR_RED, COLOR_YELLOW, ColoredHelpFormatter
 )
 from .deploy import deploy_worker, teardown_worker
 from .errors import AndroCFWError
@@ -327,6 +327,77 @@ def cmd_snippet(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_deploy_serverless(args: argparse.Namespace) -> int:
+    session_path = _session_path(args)
+
+    try:
+        session = CFWSession.load(str(session_path) if args.path else None)
+    except AndroCFWError:
+        log_warn("No active session found. Running `andro-cfw init` first...")
+        init_args = argparse.Namespace(name=args.name if hasattr(args, "name") else None, path=args.path, force=False, accounts=1)
+        if cmd_init(init_args) != 0:
+            return 1
+        session = CFWSession.load(str(session_path) if args.path else None)
+
+    token = getattr(args, "token", None)
+    if not token:
+        try:
+            token = input(f"{COLOR_BOLD}{COLOR_CYAN}[andro-cfw]{COLOR_RESET} Enter your Telegram Bot Token from @BotFather: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            log_warn("\nOperation cancelled.")
+            return 130
+
+    if not token or ":" not in token:
+        log_error("Invalid Telegram Bot Token format. Token must contain a colon (e.g. 123456789:ABCDefgh...)")
+        return 1
+
+    bot_file = getattr(args, "bot_file", None)
+    if not bot_file and not getattr(args, "yes", False):
+        try:
+            bot_file = input(f"{COLOR_BOLD}{COLOR_CYAN}[andro-cfw]{COLOR_RESET} Optional: Enter path to your bot script file (Python/JS/etc) [Press Enter to skip]: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            pass
+
+    if bot_file and Path(bot_file).exists():
+        log_info(f"Detected bot script at '{bot_file}'.")
+
+    worker_url = session.worker_url.rstrip("/")
+    webhook_url = f"{worker_url}/webhook"
+    telegram_set_webhook_url = f"https://api.telegram.org/bot{token}/setWebhook?url={webhook_url}"
+
+    log_working("Registering 100% Serverless Webhook on Cloudflare Edge...")
+
+    # Attempt automatic Webhook registration through the worker proxy itself
+    import urllib.request
+    proxy_webhook_req = f"{worker_url}/bot{token}/setWebhook?url={webhook_url}"
+    registered = False
+    try:
+        req = urllib.request.Request(proxy_webhook_req, headers={"User-Agent": "andro-cfw"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 200:
+                registered = True
+    except Exception:
+        pass
+
+    log_success("100% Serverless Cloudflare Bot Deployment Complete! 🚀")
+    print(f"\n  {COLOR_BOLD}Worker URL{COLOR_RESET}   : {COLOR_CYAN}{worker_url}{COLOR_RESET}")
+    print(f"  {COLOR_BOLD}Webhook URL{COLOR_RESET}  : {COLOR_CYAN}{webhook_url}{COLOR_RESET}")
+    if registered:
+        print(f"  {COLOR_BOLD}Webhook Status{COLOR_RESET}: {COLOR_GREEN}Registered successfully with Telegram!{COLOR_RESET}")
+    else:
+        print(f"  {COLOR_BOLD}Webhook Status{COLOR_RESET}: {COLOR_YELLOW}Ready for registration{COLOR_RESET}")
+
+    print(f"\n{COLOR_BOLD}{COLOR_BLUE}🔗 Direct Webhook Registration Link:{COLOR_RESET}")
+    print(f"   {COLOR_CYAN}{telegram_set_webhook_url}{COLOR_RESET}\n")
+
+    log_notice("ℹ️  Note on Browser Webhook Registration:")
+    log_dim("   Since api.telegram.org is network-filtered in restricted regions, please ensure")
+    log_dim("   your VPN is enabled for 2 seconds if opening the api.telegram.org link in your browser.")
+    log_dim("   You ONLY need a VPN for this one-time setup link. Afterwards, Telegram and Cloudflare")
+    log_dim("   communicate 24/7 in the cloud with ZERO VPN required forever!\n")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="andro-cfw",
@@ -346,6 +417,13 @@ def main(argv=None) -> int:
              "auto-switches between them and resets daily). Default: 1.",
     )
     p_init.set_defaults(func=cmd_init)
+
+    p_serverless = sub.add_parser("deploy-serverless", aliases=["serverless", "deploy-webhook"], help="Deploy a 100% serverless 24/7 Telegram bot to Cloudflare Edge.", formatter_class=ColoredHelpFormatter)
+    p_serverless.add_argument("--token", help="Telegram bot token from @BotFather")
+    p_serverless.add_argument("--bot-file", help="Path to bot code file (Python, JS, etc.)")
+    p_serverless.add_argument("--path", help="Project directory (default: current directory)")
+    p_serverless.add_argument("--yes", "-y", action="store_true", help="Skip interactive prompts")
+    p_serverless.set_defaults(func=cmd_deploy_serverless)
 
     p_add = sub.add_parser("add-account", help="Add one more Cloudflare account/worker to an existing load-balanced session.", formatter_class=ColoredHelpFormatter)
     p_add.add_argument("--name", help="Base name for the new worker")

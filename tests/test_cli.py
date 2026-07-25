@@ -12,6 +12,7 @@ from andro_cfw.cli import (
     cmd_check,
     cmd_snippet,
     cmd_remove,
+    cmd_deploy_serverless,
     main,
 )
 from andro_cfw.errors import DeploymentError, SessionNotFoundError
@@ -193,4 +194,15 @@ def test_main_cli_keyboard_interrupt():
     with patch("andro_cfw.cli.cmd_status", side_effect=KeyboardInterrupt()):
         ret = main(["status"])
         assert ret == 130
+
+
+def test_cmd_deploy_serverless(tmp_path):
+    session = CFWSession.new(worker_name="w1", worker_url="https://w1.workers.dev")
+    args = argparse.Namespace(token="12345:TEST_TOKEN", bot_file=None, path=str(tmp_path), yes=True)
+
+    with patch("andro_cfw.cli.CFWSession.load", return_value=session), \
+         patch("urllib.request.urlopen", return_value=MagicMock(status=200)):
+        ret = cmd_deploy_serverless(args)
+        assert ret == 0
+
 
