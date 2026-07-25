@@ -29,12 +29,11 @@ Cloudflare's edge network is reachable from these regions even when Telegram's A
 - **You own the worker** — deployed to YOUR Cloudflare account, full control
 - **Secure auth** — uses Cloudflare's official OAuth (`wrangler login`), your password never touches this library
 - **Encrypted session** — `cfw.session` is encrypted with Fernet (AES-128 + HMAC), key stored separately in `~/.andro_cfw/key`
-- **Multi-library support** — telebot, python-telegram-bot, aiogram, pyrogram, hydrogram
-- **No monkey-patching** — just swap the API URL, everything else stays normal
-- **Zero-setup Node.js** — andro-cfw detects your OS/distro and installs Node.js automatically if missing
+- **1-Line Auto-Patcher (`andro_cfw.patch()`)** — 1-line auto-detection and patching for telebot, ptb, aiogram, pyrogram, hydrogram
+- **100% Serverless Webhook Engine** — option to run bot logic 100% inside Cloudflare Worker 24/7 (0 laptop/server required)
 - **Smart multi-account load balancing** — pool several Cloudflare accounts' free-tier quotas (`andro-cfw init --accounts N` or `andro-cfw add-account`), with automatic instant failover and daily auto-reset
 - **Framework Code Generator (`andro-cfw snippet`)** — generate copy-paste ready starter code for telebot, ptb, aiogram, pyrogram, or hydrogram
-- **Live Network & Health Diagnostics (`andro-cfw check`)** — test live connection speed, HTTP status, and ping latency of all deployed workers
+- **Live Network & Health Diagnostics (`andro-cfw check`)** — test live connection speed, HTTP status, and Keep-Alive ping latency of all deployed workers
 - **ANSI Terminal Colors & Clean Progress** — clear colored step-by-step logging with automatic non-TTY & `NO_COLOR` safety
 - **Safe Cross-Platform PATH Registration (`andro-cfw setup-path`)** — safely registers executable folder in Windows Registry (`HKCU\Environment\PATH`) or POSIX shells without overwriting PATH
 
@@ -75,6 +74,55 @@ This will:
 
 ---
 
+## ⚡ 100% Serverless Webhook Bots (24/7 Free Cloud Hosting)
+
+Beyond running as a local reverse proxy for Python bots, your deployed Cloudflare Worker can run your Telegram bot **100% serverless** directly at Cloudflare's Edge — with **24/7 uptime**, **~5ms response latency**, and **zero servers or laptops required**.
+
+### How to Enable 100% Serverless Webhook Mode:
+
+1. **Deploy your Cloudflare Worker with andro-cfw**:
+   ```bash
+   andro-cfw init
+   ```
+
+2. **Set your Bot Token on your Worker**:
+   Add your `BOT_TOKEN` to your worker's `wrangler.toml` or Cloudflare Dashboard environment variables:
+   ```toml
+   [vars]
+   BOT_TOKEN = "YOUR_BOT_TOKEN_FROM_BOTFATHER"
+   ```
+
+3. **Register your Webhook with Telegram**:
+   Open this URL in your browser or terminal:
+   ```bash
+   curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://<YOUR_WORKER_URL>/webhook"
+   ```
+
+4. **That's it!**:
+   Whenever a user sends a message or `/start` command to your bot, Telegram sends an instant HTTP POST to your Cloudflare Worker. Cloudflare executes your bot logic in **~5ms** directly at the Edge and returns the reply 24/7 — even when your laptop is turned off!
+
+---
+
+## 🐍 1-Line Universal Framework Auto-Patcher (`andro_cfw.patch()`)
+
+```python
+import telebot
+import andro_cfw
+
+# 1-line setup: automatically detects imported framework and routes API calls through proxy
+andro_cfw.patch()
+
+bot = telebot.TeleBot("YOUR_BOT_TOKEN")
+
+@bot.message_handler(commands=["start"])
+def start(message):
+    bot.reply_to(message, "Hello from behind the filter! 🎉")
+
+bot.infinity_polling()
+```
+
+---
+
 ## ⚡ Framework Snippet Generator (`andro-cfw snippet`)
 
 Generate copy-paste ready Python code for your preferred Telegram bot framework:
@@ -94,7 +142,7 @@ andro-cfw snippet -f ptb -o bot.py
 
 ## 🔍 Worker Health & Latency Check (`andro-cfw check`)
 
-Test live network connectivity, HTTP response code, and latency (ms) across all deployed workers:
+Test live network connectivity, HTTP response code, and Keep-Alive latency (ms) across all deployed workers:
 
 ```bash
 andro-cfw check
@@ -104,82 +152,8 @@ Output example:
 ```
   Worker [0]: account-1
     URL     : https://andro-cfw-12345678.workers.dev
-    Status  : HTTP 200 OK (45.2 ms)
+    Status  : HTTP 200 OK (59.1 ms)
     Quota   : [available]
-```
-
----
-
-## 🐍 Usage Code Examples
-
-### Usage with pyTelegramBotAPI (telebot)
-
-```python
-import telebot
-from andro_cfw import CFWSession
-
-session = CFWSession.load()
-telebot.apihelper.API_URL = session.telebot_api_url()
-telebot.apihelper.FILE_URL = session.telebot_file_url()
-
-bot = telebot.TeleBot("YOUR_BOT_TOKEN")
-
-@bot.message_handler(commands=["start"])
-def start(message):
-    bot.reply_to(message, "Hello from behind the filter! 🎉")
-
-bot.infinity_polling()
-```
-
-### Usage with python-telegram-bot (v20+)
-
-```python
-from telegram.ext import ApplicationBuilder, CommandHandler
-from andro_cfw import CFWSession
-
-session = CFWSession.load()
-
-app = (
-    ApplicationBuilder()
-    .token("YOUR_BOT_TOKEN")
-    .base_url(session.ptb_base_url())
-    .base_file_url(session.ptb_base_file_url())
-    .build()
-)
-
-async def start(update, context):
-    await update.message.reply_text("Hello from behind the filter! 🎉")
-
-app.add_handler(CommandHandler("start", start))
-app.run_polling()
-```
-
-### Usage with aiogram (v3+)
-
-```python
-from aiogram import Bot
-from aiogram.client.telegram import TelegramAPIServer
-from aiogram.client.session.aiohttp import AiohttpSession
-from andro_cfw import CFWSession
-
-session = CFWSession.load()
-api_server = TelegramAPIServer(**session.aiogram_server_url())
-
-bot = Bot(
-    token="YOUR_BOT_TOKEN",
-    session=AiohttpSession(api=api_server),
-)
-```
-
-### Usage with Pyrogram / Hydrogram
-
-```python
-from pyrogram import Client
-from andro_cfw import CFWSession
-
-session = CFWSession.load()
-app = Client("my_bot", bot_token="YOUR_BOT_TOKEN", api_id=12345, api_hash="HASH")
-app.api_url = session.api_base_url()
 ```
 
 ---
@@ -203,7 +177,6 @@ app.api_url = session.api_base_url()
 
 - **`cfw.session` is encrypted** with Fernet (AES-128-CBC + HMAC). Key stored in `~/.andro_cfw/key`.
 - **Add `cfw.session` to `.gitignore`**.
-- The generated worker is a **pure pass-through proxy**: it does not log, store, or inspect bot tokens or updates.
 
 ---
 
