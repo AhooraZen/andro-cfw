@@ -19,6 +19,10 @@
  *                        worker via CORS, or "*" to allow any. Unset means no
  *                        CORS headers are emitted at all (the safe default:
  *                        Telegram libraries do not need them).
+ *   UPSTREAM_API_ORIGIN  Bot API server to proxy to. Defaults to
+ *                        https://api.telegram.org. Point it at your own
+ *                        `telegram-bot-api` instance to lift Telegram's 50 MB
+ *                        upload cap or keep media on your own infrastructure.
  */
 
 export interface Env {
@@ -26,9 +30,35 @@ export interface Env {
   WEBHOOK_SECRET?: string;
   FORWARD_WEBHOOK_URL?: string;
   ALLOWED_ORIGINS?: string;
+  UPSTREAM_API_ORIGIN?: string;
 }
 
-const TELEGRAM_ORIGIN = "https://api.telegram.org";
+const DEFAULT_TELEGRAM_ORIGIN = "https://api.telegram.org";
+
+/**
+ * Resolve the Bot API origin to proxy to.
+ *
+ * A misconfigured value must not silently become a request to somewhere
+ * unexpected, so anything that is not a well-formed http(s) origin falls back
+ * to Telegram's own. Any path, query or fragment is dropped -- only the origin
+ * is used, since the request's own path is appended to it.
+ */
+function upstreamOrigin(env: Env): string {
+  const configured = (env.UPSTREAM_API_ORIGIN || "").trim();
+  if (!configured) return DEFAULT_TELEGRAM_ORIGIN;
+
+  try {
+    const parsed = new URL(configured);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      console.error(`Ignoring UPSTREAM_API_ORIGIN with unsupported scheme: ${parsed.protocol}`);
+      return DEFAULT_TELEGRAM_ORIGIN;
+    }
+    return parsed.origin;
+  } catch {
+    console.error("Ignoring malformed UPSTREAM_API_ORIGIN; falling back to api.telegram.org.");
+    return DEFAULT_TELEGRAM_ORIGIN;
+  }
+}
 
 /**
  * Hop-by-hop headers must not be forwarded to the origin or echoed back to the
@@ -140,9 +170,10 @@ async function handleWebhook(
 async function handleProxy(
   request: Request,
   url: URL,
+  origin: string,
   cors: Record<string, string>,
 ): Promise<Response> {
-  const targetUrl = TELEGRAM_ORIGIN + url.pathname + url.search;
+  const targetUrl = origin + url.pathname + url.search;
 
   const forwardHeaders = new Headers();
   for (const [key, value] of request.headers) {
@@ -226,6 +257,6 @@ export default {
     }
 
     // 4. Transparent pass-through reverse proxy
-    return handleProxy(request, url, cors);
+    return handleProxy(request, url, upstreamOrigin(env), cors);
   },
 };

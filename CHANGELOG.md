@@ -42,6 +42,22 @@ migration notes below before upgrading.
 - **Account labels are validated** so they cannot escape `~/.andro_cfw/accounts`.
 - **URL schemes are pinned** to http/https before any `urlopen` call.
 
+### ⚡ Added
+
+- **Self-hosted Bot API support (`UPSTREAM_API_ORIGIN`).** The worker proxied to
+  a hardcoded `api.telegram.org`; it can now target your own
+  [`telegram-bot-api`](https://github.com/tdlib/telegram-bot-api) instance, which
+  lifts Telegram's 50 MB upload cap. Only the origin is used, and a malformed or
+  non-http(s) value falls back to Telegram rather than sending traffic somewhere
+  unintended.
+- **The load balancer streams payloads instead of buffering them.** Response
+  bodies are relayed in 64 KB chunks — only the first 512 bytes are held, to
+  recognise a Cloudflare quota page. Request bodies stay in memory up to 1 MB and
+  spill to a temp file above that, so concurrent file transfers no longer pin
+  tens of megabytes of RAM while remaining replayable for quota failover.
+  Chunked upstream responses (no `Content-Length` after urllib decodes them) are
+  delimited with `Connection: close`, and `HEAD` correctly sends no body.
+
 ### 🐛 Fixed
 
 - **`andro_cfw.patch()` actually works now.** The `aiogram`,
@@ -92,7 +108,7 @@ migration notes below before upgrading.
 
 ### 🧪 Testing & tooling
 
-- 76 → **121 tests**. The four `patch()` tests previously asserted against
+- 76 → **133 tests**. The four `patch()` tests previously asserted against
   `MagicMock`, which auto-creates any attribute touched — they passed no matter
   what the code did. They now use real modules and real frozen dataclasses.
 - New coverage: end-to-end load-balancer failover over a real socket, concurrent

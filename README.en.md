@@ -227,6 +227,31 @@ andro-cfw snippet -f ptb -o bot.py
 
 ---
 
+## 🛠 Self-Hosted Bot API Server (`UPSTREAM_API_ORIGIN`)
+
+By default the worker proxies to `https://api.telegram.org`. Point it at your own
+[`telegram-bot-api`](https://github.com/tdlib/telegram-bot-api) instance to lift
+Telegram's 50 MB upload cap or keep media on your own infrastructure:
+
+```bash
+npx wrangler secret put UPSTREAM_API_ORIGIN --name <your-worker-name>
+# e.g. https://bot-api.your-server.com
+```
+
+Only the origin is used — any path or query in the value is dropped, and a
+malformed or non-http(s) value falls back to `api.telegram.org` rather than
+sending traffic somewhere unintended.
+
+### Large uploads and downloads
+
+The local load balancer (multi-account mode) streams request and response
+bodies rather than buffering them. Request bodies stay in memory up to 1 MB and
+spill to a temp file above that, so concurrent file transfers do not pin RAM —
+while still being replayable if a worker hits its quota mid-request and the
+balancer has to fail over.
+
+---
+
 ## 🔍 Worker Health & Latency Check (`andro-cfw check`)
 
 Test live network connectivity, HTTP response code, and Keep-Alive latency (ms) across all deployed workers:

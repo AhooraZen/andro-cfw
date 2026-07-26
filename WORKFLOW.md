@@ -16,7 +16,7 @@ uv pip install -e ".[dev]"
 2. Implement minimum working code (follow **Ponytail** laziness & **Caveman** terseness principles)
 3. Run the full verification gate — all three must pass:
    ```bash
-   uv run --with pytest pytest      # 121 unit tests
+   uv run --with pytest pytest      # 133 unit tests
    uvx ruff check andro_cfw tests
    uvx --with cryptography mypy andro_cfw
    ```

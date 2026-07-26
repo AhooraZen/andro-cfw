@@ -8,7 +8,7 @@ Repository guide for Google Antigravity (AGY) & Gemini coding agents.
 ## Toolchain & Stack
 - **Language**: Python 3.9+ (Core CLI/library), TypeScript (Cloudflare Worker template)
 - **Package Manager**: `uv` for Python (`uv pip install`, `uv run`, `uv build`), `bun` / `npx wrangler` for JS/TS worker toolchain
-- **Testing**: `uv run --with pytest pytest` (121 unit tests in `tests/`)
+- **Testing**: `uv run --with pytest pytest` (133 unit tests in `tests/`)
 - **Lint / types**: `uvx ruff check andro_cfw tests` and `uvx --with cryptography mypy andro_cfw` — both gate CI
 - **Code Search**: `rg` (ripgrep)
 - **Secrets**: Never commit raw tokens or Fernet session keys

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 import threading
 import time
 import urllib.error
@@ -21,6 +22,17 @@ QUOTA_STATUS_CODES = {429}
 # call, and Content-Length is attacker-controlled, so refuse rather than
 # allocate a buffer of whatever size the header claims.
 MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
+
+# Request bodies stay in memory up to this size and spill to a temp file above
+# it, so a few concurrent file uploads cannot pin tens of megabytes of RAM.
+SPOOL_THRESHOLD_BYTES = 1024 * 1024
+
+# Copy size for relaying bodies in both directions.
+STREAM_CHUNK_BYTES = 64 * 1024
+
+# How much of a response body is buffered to recognise a Cloudflare quota page.
+# Everything past this is streamed straight through to the client.
+QUOTA_SNIFF_BYTES = 512
 
 # Hop-by-hop headers are connection-scoped and must not be relayed.
 HOP_BY_HOP_HEADERS = frozenset(
@@ -197,8 +209,27 @@ class LoadBalancer:
             )
             return
 
-        body = handler.rfile.read(content_length) if content_length else None
+        # Spool the request body instead of holding it in memory. Failover has
+        # to replay the same body against the next worker, so it cannot simply
+        # stream off the socket -- but it can live on disk once it is large.
+        body = None
+        if content_length:
+            body = tempfile.SpooledTemporaryFile(max_size=SPOOL_THRESHOLD_BYTES)
+            remaining = content_length
+            while remaining > 0:
+                chunk = handler.rfile.read(min(STREAM_CHUNK_BYTES, remaining))
+                if not chunk:
+                    break
+                body.write(chunk)
+                remaining -= len(chunk)
 
+        try:
+            self._proxy_with_failover(handler, body, content_length)
+        finally:
+            if body is not None:
+                body.close()
+
+    def _proxy_with_failover(self, handler, body, content_length: int) -> None:
         tried_indices = set()
         attempts = 0
         max_attempts = max(1, len(self.session.workers))
@@ -212,10 +243,12 @@ class LoadBalancer:
             tried_indices.add(index)
 
             target_url = worker.worker_url.rstrip("/") + handler.path
+            if body is not None:
+                body.seek(0)
 
             try:
-                status, resp_headers, resp_body = self._forward(
-                    target_url, handler.command, dict(handler.headers), body
+                status, resp_headers, upstream = self._open_upstream(
+                    target_url, handler.command, dict(handler.headers), body, content_length
                 )
             except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
                 # Network-level failure talking to this worker/account --
@@ -226,18 +259,23 @@ class LoadBalancer:
                     break
                 continue
 
-            snippet = resp_body[:500].decode("utf-8", "ignore") if resp_body else ""
-            if _looks_like_quota_error(status, snippet):
-                self._mark_exhausted(index, f"HTTP {status}")
-                if len(tried_indices) >= max_attempts:
-                    # Every account is currently exhausted -- return the
-                    # last (quota-limited) response as-is, best effort.
-                    self._send_response(handler, status, resp_headers, resp_body)
-                    return
-                continue
+            try:
+                # Only the head of the body is buffered: enough to recognise a
+                # Cloudflare quota page, never the whole payload.
+                head = upstream.read(QUOTA_SNIFF_BYTES)
+                if _looks_like_quota_error(status, head.decode("utf-8", "ignore")):
+                    self._mark_exhausted(index, f"HTTP {status}")
+                    if len(tried_indices) >= max_attempts:
+                        # Every account is exhausted -- relay the last
+                        # quota-limited response as-is, best effort.
+                        self._stream_response(handler, status, resp_headers, head, upstream)
+                        return
+                    continue
 
-            self._send_response(handler, status, resp_headers, resp_body)
-            return
+                self._stream_response(handler, status, resp_headers, head, upstream)
+                return
+            finally:
+                upstream.close()
 
         # Every account failed, or the pool is empty. Send a framed response:
         # under HTTP/1.1 a reply with no Content-Length leaves the client
@@ -248,20 +286,80 @@ class LoadBalancer:
         )
 
     @staticmethod
-    def _forward(url: str, method: str, headers: dict, body: Optional[bytes]):
+    def _open_upstream(url: str, method: str, headers: dict, body, content_length: int):
+        """
+        Start the upstream request and return (status, headers, response).
+
+        The response is returned unread so the caller can stream it. The caller
+        owns it and must close it.
+        """
         # `accept-encoding` is dropped so the upstream replies uncompressed:
         # urllib does not decode gzip, and a compressed body would make the
-        # quota-marker sniffing in _proxy_request read binary noise.
+        # quota-marker sniffing in _proxy_with_failover read binary noise.
         skip = HOP_BY_HOP_HEADERS | {"host", "content-length", "accept-encoding"}
         filtered_headers = {k: v for k, v in headers.items() if k.lower() not in skip}
+        if body is not None:
+            # http.client streams a file object only when it knows the length;
+            # without this it would fall back to chunked encoding.
+            filtered_headers["Content-Length"] = str(content_length)
+
         req = urllib.request.Request(  # noqa: S310 - scheme pinned by require_http_url
             require_http_url(url), data=body, method=method, headers=filtered_headers,
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - scheme pinned above
-                return resp.status, dict(resp.getheaders()), resp.read()
+            resp = urllib.request.urlopen(req, timeout=30)  # noqa: S310 - scheme pinned above
+            return resp.status, dict(resp.getheaders()), resp
         except urllib.error.HTTPError as http_err:
-            return http_err.code, dict(http_err.headers or {}), http_err.read()
+            # HTTPError is itself a readable response object.
+            return http_err.code, dict(http_err.headers or {}), http_err
+
+    @staticmethod
+    def _stream_response(handler, status: int, headers: dict, head: bytes, upstream) -> None:
+        """
+        Relay an upstream response to the client without buffering it whole.
+
+        `head` is the already-consumed prefix used for quota sniffing; it is
+        written first, then the remainder is copied in chunks.
+        """
+        upstream_length = None
+        for key, value in headers.items():
+            if key.lower() == "content-length":
+                try:
+                    upstream_length = int(value)
+                except (TypeError, ValueError):
+                    upstream_length = None
+                break
+
+        handler.send_response(status)
+        for key, value in headers.items():
+            if key.lower() in HOP_BY_HOP_HEADERS or key.lower() == "content-length":
+                continue
+            handler.send_header(key, value)
+
+        if upstream_length is not None:
+            handler.send_header("Content-Length", str(upstream_length))
+        else:
+            # Length unknown (upstream was chunked, which urllib already
+            # decoded). Under HTTP/1.1 the only other way to delimit the body
+            # is to close the connection when it ends.
+            handler.send_header("Connection", "close")
+            handler.close_connection = True
+        handler.end_headers()
+
+        if handler.command == "HEAD":
+            return
+
+        try:
+            if head:
+                handler.wfile.write(head)
+            while True:
+                chunk = upstream.read(STREAM_CHUNK_BYTES)
+                if not chunk:
+                    break
+                handler.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            # The bot hung up mid-download; nothing left to do.
+            pass
 
     @staticmethod
     def _send_response(handler: BaseHTTPRequestHandler, status: int, headers: dict, body: Optional[bytes]) -> None:

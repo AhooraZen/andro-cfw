@@ -77,3 +77,20 @@ def test_wrangler_template_renders():
     rendered = tmpl.format(worker_name="andro-cfw-abcd1234")
     assert 'name = "andro-cfw-abcd1234"' in rendered
     assert 'main = "worker.ts"' in rendered
+
+
+def test_upstream_origin_is_configurable(worker):
+    """
+    DIR-04: allow pointing the proxy at a self-hosted telegram-bot-api server
+    instead of api.telegram.org.
+    """
+    assert "UPSTREAM_API_ORIGIN" in worker
+    assert "function upstreamOrigin(" in worker
+    assert "upstreamOrigin(env)" in worker
+
+
+def test_upstream_origin_falls_back_on_bad_input(worker):
+    """A typo in the setting must not send traffic somewhere unexpected."""
+    assert "DEFAULT_TELEGRAM_ORIGIN" in worker
+    assert 'parsed.protocol !== "https:"' in worker
+    assert "parsed.origin" in worker
