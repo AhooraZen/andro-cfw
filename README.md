@@ -94,6 +94,36 @@ The worker source is uploaded straight to the Cloudflare API, the `workers.dev` 
 
 ---
 
+### Two ways to authenticate
+
+| | `andro-cfw login` | `andro-cfw login --browser` |
+|---|---|---|
+| What you hand over | An API token you create and paste | Nothing — you approve on Cloudflare's own site |
+| What is stored | The token, until you revoke it | A short-lived access token, refreshed automatically |
+| Works headless | Yes (`$CLOUDFLARE_API_TOKEN`) | No, it needs a browser |
+| Setup | None | Requires an OAuth client id (see below) |
+
+The token flow is the default because it needs no setup and works on a server.
+The browser flow asks less of your trust: the credential is issued on
+Cloudflare's domain, the consent screen lists the exact scopes, and what lands
+on disk expires.
+
+**Enabling the browser flow.** andro-cfw deliberately ships no OAuth client id.
+Register a public client with "Authorization Code with PKCE" and the redirect
+URI `http://localhost:8976/oauth/callback` at
+[Cloudflare's OAuth client docs](https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/),
+then set `ANDRO_CFW_OAUTH_CLIENT_ID`.
+
+> **Why not just reuse wrangler's client id?** It is public, and it would work.
+> But Cloudflare's consent screen names the application being authorised — the
+> user would be told that *Wrangler* wants access, and the grant would appear
+> under Wrangler in their list of authorised applications. That is a worse trust
+> story than asking for a token, so andro-cfw does not do it.
+
+Either way, credentials are encrypted at `~/.andro_cfw/credentials` (mode 0600)
+with the same local key as your session, and `andro-cfw logout` revokes and
+removes them.
+
 ## 🧠 The shared proxy daemon (`andro-cfw daemon`)
 
 Run one daemon per machine:

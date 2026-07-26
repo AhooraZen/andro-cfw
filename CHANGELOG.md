@@ -41,6 +41,25 @@ must re-authenticate; see the migration notes at the end of this entry.
 - **The per-process load balancer is replaced by a shared daemon.**
   `andro-cfw daemon` is now the supported way to run a multi-account pool.
 
+### 🔐 Browser login (optional)
+
+- **`andro-cfw login --browser`** runs Cloudflare's OAuth 2.0 authorization-code
+  flow with PKCE, in pure Python — no Node, no wrangler. The credential is
+  issued on Cloudflare's own domain, the consent screen lists the exact scopes,
+  and what is stored is a short-lived access token plus a refresh token that
+  `client_for()` renews transparently before it expires.
+- Scopes requested are the minimum to deploy a Worker and set its secrets:
+  `account:read`, `user:read`, `workers:write`, `workers_scripts:write`,
+  `workers_routes:write`, `offline_access`. No KV, R2, D1 or zone access.
+- **`andro-cfw logout`** revokes the grant with Cloudflare and forgets it.
+- The browser flow needs an OAuth client id (`ANDRO_CFW_OAUTH_CLIENT_ID`), which
+  andro-cfw does not ship. Reusing wrangler's public client id would work, but
+  Cloudflare's consent screen names the application being authorised: users
+  would be told *Wrangler* wants access, and the grant would file under Wrangler
+  in their authorised-applications list. A test asserts that id never appears in
+  the source.
+- Pasting an API token remains the default and the only headless option.
+
 ### 🔒 Security
 
 - **No code path can install software or ask for `sudo` any more.** The removal
@@ -249,7 +268,7 @@ migration notes below before upgrading.
 
 ### 🧪 Testing & tooling
 
-- 76 → **201 tests**. The four `patch()` tests previously asserted against
+- 76 → **220 tests**. The four `patch()` tests previously asserted against
   `MagicMock`, which auto-creates any attribute touched — they passed no matter
   what the code did. They now use real modules and real frozen dataclasses.
 - New coverage: end-to-end load-balancer failover over a real socket, concurrent

@@ -7,11 +7,14 @@ import urllib.request
 from importlib import resources
 from typing import Optional
 
+from . import oauth
 from .cloudflare import (
     WORKER_MODULE_NAME,
     CloudflareClient,
+    forget_credentials,
     load_credentials,
     save_credentials,
+    update_credentials,
 )
 from .colors import log_dim, log_success, log_working
 from .errors import DeploymentError
@@ -41,9 +44,16 @@ def client_for(account_label: Optional[str]) -> CloudflareClient:
     creds = load_credentials(label)
     if not creds:
         raise DeploymentError(
-            f"No Cloudflare API token stored for '{label}'. "
+            f"No Cloudflare credentials stored for '{label}'. "
             "Run `andro-cfw login` first."
         )
+
+    # An OAuth access token is short lived. Refresh it here rather than at
+    # every call site, so a long-running daemon never fails on an expiry.
+    if oauth.needs_refresh(creds):
+        creds = oauth.refresh(creds)
+        update_credentials(label, creds)
+
     return CloudflareClient(creds["api_token"], creds.get("account_id"))
 
 
@@ -62,6 +72,40 @@ def login(api_token: str, account_label: Optional[str] = None,
     save_credentials(label, api_token, resolved_account_id)
     log_success(f"Cloudflare credentials stored for '{label}'.")
     return resolved_account_id
+
+
+def browser_login(account_label: Optional[str] = None,
+                  account_id: Optional[str] = None) -> str:
+    """
+    Log in through Cloudflare's own consent screen instead of a pasted token.
+
+    The credential never leaves Cloudflare's domain in a form the user has to
+    handle, and what is stored is a short-lived access token plus a refresh
+    token rather than a permanent one.
+    """
+    label = account_label or "default"
+    credentials = oauth.browser_login()
+
+    client = CloudflareClient(credentials["api_token"], account_id)
+    resolved_account_id = client.resolve_account_id()
+    credentials["account_id"] = resolved_account_id
+
+    update_credentials(label, credentials)
+    log_success(f"Logged in to Cloudflare as '{label}' via your browser.")
+    return resolved_account_id
+
+
+def logout(account_label: Optional[str] = None) -> bool:
+    """Revoke an OAuth grant where possible and forget the stored credential."""
+    label = account_label or "default"
+    creds = load_credentials(label)
+    if not creds:
+        return False
+    if creds.get("auth_type") == "oauth":
+        oauth.revoke(creds)
+    forget_credentials(label)
+    log_success(f"Removed stored credentials for '{label}'.")
+    return True
 
 
 def _wait_until_live(worker_url: str) -> bool:

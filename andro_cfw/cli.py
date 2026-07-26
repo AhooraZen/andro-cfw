@@ -29,7 +29,14 @@ from .colors import (
     log_warn,
     log_working,
 )
-from .deploy import deploy_worker, login, put_worker_secret, teardown_worker
+from .deploy import (
+    browser_login,
+    deploy_worker,
+    login,
+    logout,
+    put_worker_secret,
+    teardown_worker,
+)
 from .errors import AndroCFWError
 from .platform_utils import add_to_user_path
 from .session import DEFAULT_SESSION_FILENAME, CFWSession, require_http_url
@@ -74,11 +81,33 @@ def _ensure_logged_in(label: str, token: str | None = None,
 
 
 def cmd_login(args: argparse.Namespace) -> int:
+    from . import oauth
+
     label = args.account or "default"
-    token = getattr(args, "token", None)
-    if not _ensure_logged_in(label, token=token, account_id=getattr(args, "account_id", None)):
-        return 1
+
+    if getattr(args, "browser", False):
+        try:
+            browser_login(account_label=label, account_id=getattr(args, "account_id", None))
+        except AndroCFWError as exc:
+            log_error(f"{exc}")
+            return 1
+    else:
+        if oauth.is_available():
+            log_dim("Tip: `andro-cfw login --browser` logs in on Cloudflare's own "
+                    "site, so you never handle a long-lived token.")
+        if not _ensure_logged_in(label, token=getattr(args, "token", None),
+                                 account_id=getattr(args, "account_id", None)):
+            return 1
+
     log_info(f"Stored accounts: {', '.join(stored_account_labels())}")
+    return 0
+
+
+def cmd_logout(args: argparse.Namespace) -> int:
+    label = args.account or "default"
+    if not logout(label):
+        log_warn(f"No stored credentials for '{label}'.")
+        return 1
     return 0
 
 
@@ -626,7 +655,16 @@ def main(argv=None) -> int:
         help="API token. Prefer $CLOUDFLARE_API_TOKEN or the hidden prompt: "
              "argv is readable by every process on the machine.",
     )
+    p_login.add_argument(
+        "--browser", action="store_true",
+        help="Log in through Cloudflare's own consent screen instead of pasting "
+             "a token. Stores a short-lived token that is refreshed automatically.",
+    )
     p_login.set_defaults(func=cmd_login)
+
+    p_logout = sub.add_parser("logout", help="Revoke and forget stored Cloudflare credentials.", formatter_class=ColoredHelpFormatter)
+    p_logout.add_argument("--account", help="Account label (default: 'default')")
+    p_logout.set_defaults(func=cmd_logout)
 
     p_daemon = sub.add_parser("daemon", help="Run the shared local proxy every bot on this machine can use.", formatter_class=ColoredHelpFormatter)
     p_daemon.add_argument("--port", type=int, default=DEFAULT_DAEMON_PORT, help=f"Port to listen on (default: {DEFAULT_DAEMON_PORT})")

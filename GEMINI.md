@@ -10,7 +10,7 @@ Repository guide for Google Antigravity (AGY) & Gemini coding agents.
 - **Package Manager**: `uv` for Python (`uv pip install`, `uv run`, `uv build`). No JS toolchain: the package has no build step for the worker and installs nothing outside the venv.
 - **Runtime dependencies**: `cryptography` only. HTTP is stdlib `urllib`; usage accounting is stdlib `sqlite3`.
 - **Cloudflare auth**: scoped API token ("Edit Cloudflare Workers" template), stored Fernet-encrypted at `~/.andro_cfw/credentials` (0600)
-- **Testing**: `uv run --with pytest pytest` (201 unit tests in `tests/`)
+- **Testing**: `uv run --with pytest pytest` (220 unit tests in `tests/`)
 - **Lint / types**: `uvx ruff check andro_cfw tests` and `uvx --with cryptography mypy andro_cfw` — both gate CI
 - **Code Search**: `rg` (ripgrep)
 - **Secrets**: Never commit raw tokens, Cloudflare API tokens, or Fernet session keys

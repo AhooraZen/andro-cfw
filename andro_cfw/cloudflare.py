@@ -74,7 +74,18 @@ def _write_credentials(data: dict) -> None:
 def save_credentials(account_label: str, api_token: str, account_id: str) -> None:
     """Persist one account's API token, encrypted with the local key."""
     data = _read_credentials()
-    data[account_label] = {"api_token": api_token, "account_id": account_id}
+    data[account_label] = {
+        "auth_type": "token",
+        "api_token": api_token,
+        "account_id": account_id,
+    }
+    _write_credentials(data)
+
+
+def update_credentials(account_label: str, credentials: dict) -> None:
+    """Replace one account's whole credential record (token, refresh, expiry)."""
+    data = _read_credentials()
+    data[account_label] = credentials
     _write_credentials(data)
 
 

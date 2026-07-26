@@ -363,7 +363,12 @@ def test_delete_worker_issues_a_delete():
 def test_credentials_survive_a_save_and_load_round_trip(tmp_path):
     with isolated_credentials(tmp_path):
         save_credentials("personal", "cf-token-abc", "acc-1")
-        assert load_credentials("personal") == {"api_token": "cf-token-abc", "account_id": "acc-1"}
+        stored = load_credentials("personal")
+        assert stored["api_token"] == "cf-token-abc"
+        assert stored["account_id"] == "acc-1"
+        # A pasted token is recorded as such, so client_for knows not to try
+        # refreshing it the way it refreshes an OAuth grant.
+        assert stored["auth_type"] == "token"
 
 
 def test_loading_an_account_that_was_never_saved_returns_none(tmp_path):
