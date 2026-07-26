@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ordinary HTTP backend.
 - **A non-2xx from the forward target is now logged.** Previously only a thrown
   exception was, so a backend answering 500 was indistinguishable from success.
+- **The webhook secret is passed through to the forward target.** A backend's
+  own URL is usually public, and without the header it had no way to tell a
+  relayed update from one someone POSTed at it directly.
 
 ---
 

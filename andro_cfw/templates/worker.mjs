@@ -18,7 +18,9 @@
  *                        NEVER read from the request URL.
  *   WEBHOOK_SECRET       Shared secret Telegram sends back in the
  *                        X-Telegram-Bot-Api-Secret-Token header. When set,
- *                        /webhook rejects any update without a matching value.
+ *                        /webhook rejects any update without a matching value,
+ *                        and passes the header on so the backend can check it
+ *                        too.
  *   FORWARD_WEBHOOK_URL  Your own backend. Updates are POSTed here verbatim.
  *   FORWARD_SERVICE      Service binding to another Worker on the same account,
  *                        used in preference to FORWARD_WEBHOOK_URL. Required
@@ -161,10 +163,17 @@ async function handleWebhook(request, env, cors) {
     : env.FORWARD_WEBHOOK_URL;
   const send = service ? service.fetch.bind(service) : fetch;
 
+  // Pass the secret through so the backend can authenticate the relay too.
+  // Its own URL is often public, and without this it has no way to tell a real
+  // relayed update from one someone POSTed at it directly.
+  const forwardHeaders = { "Content-Type": "application/json" };
+  const secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+  if (secret) forwardHeaders["X-Telegram-Bot-Api-Secret-Token"] = secret;
+
   try {
     const relayed = await send(target, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: forwardHeaders,
       body: payload,
     });
     // Log rather than propagate: a non-200 makes Telegram redeliver the same
