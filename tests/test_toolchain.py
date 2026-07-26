@@ -12,6 +12,17 @@ from andro_cfw.toolchain import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _neutral_install_env(monkeypatch):
+    """
+    check_node_toolchain() honours ANDRO_CFW_NO_AUTO_INSTALL, and CI sets it so
+    the suite can never trigger a system package install. Clear it here so these
+    tests exercise the code path they name rather than the ambient environment;
+    the test that covers the opt-out sets it explicitly.
+    """
+    monkeypatch.delenv("ANDRO_CFW_NO_AUTO_INSTALL", raising=False)
+
+
 def test_run_version():
     with patch("shutil.which", return_value="/usr/bin/node"), \
          patch("subprocess.run") as mock_run:
