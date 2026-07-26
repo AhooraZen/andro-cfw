@@ -34,7 +34,7 @@ def test_cmd_init_single(tmp_path):
         path=str(tmp_path), force=False, accounts=1, name="test-bot"
     )
 
-    with patch("andro_cfw.cli.cloudflare_login") as mock_login, \
+    with patch("andro_cfw.cli._ensure_logged_in", return_value=True) as mock_login, \
          patch("andro_cfw.cli.deploy_worker", return_value=("test-bot", "https://test.workers.dev")), \
          patch("andro_cfw.session.KEY_DIR", tmp_path), \
          patch("andro_cfw.session.KEY_FILE", tmp_path / "key"):
@@ -57,7 +57,7 @@ def test_cmd_init_multi(tmp_path):
         path=str(tmp_path), force=True, accounts=2, name="multi-bot"
     )
 
-    with patch("andro_cfw.cli.cloudflare_login") as mock_login, \
+    with patch("andro_cfw.cli._ensure_logged_in", return_value=True) as mock_login, \
          patch("andro_cfw.cli.deploy_worker", side_effect=[
              ("multi-bot-1", "https://w1.workers.dev"),
              ("multi-bot-2", "https://w2.workers.dev"),
@@ -73,7 +73,8 @@ def test_cmd_init_multi(tmp_path):
 
 def test_cmd_init_error_handling(tmp_path):
     args = argparse.Namespace(path=str(tmp_path), force=True, accounts=1, name="err-bot")
-    with patch("andro_cfw.cli.cloudflare_login", side_effect=DeploymentError("Login error")):
+    with patch("andro_cfw.cli._ensure_logged_in", return_value=True), \
+         patch("andro_cfw.cli.deploy_worker", side_effect=DeploymentError("deploy failed")):
         ret = cmd_init(args)
         assert ret == 1
 
@@ -84,7 +85,7 @@ def test_cmd_add_account(tmp_path):
     mock_session = CFWSession(workers=[WorkerEntry("w1", "https://w1.workers.dev")])
 
     with patch("andro_cfw.session.CFWSession.load", return_value=mock_session), \
-         patch("andro_cfw.cli.cloudflare_login"), \
+         patch("andro_cfw.cli._ensure_logged_in", return_value=True), \
          patch("andro_cfw.cli.deploy_worker", return_value=("added-bot-2", "https://w2.workers.dev")), \
          patch.object(mock_session, "save") as mock_save:
 
@@ -314,3 +315,71 @@ def test_cli_exposes_version():
     assert exc.value.code == 0
 
 
+
+
+def test_cmd_init_stops_when_login_is_cancelled(tmp_path):
+    """
+    A cancelled credential prompt must not go on to deploy. It previously could
+    not happen -- wrangler raised -- but _ensure_logged_in signals with False.
+    """
+    args = argparse.Namespace(path=str(tmp_path), force=True, accounts=1, name="bot")
+    with patch("andro_cfw.cli._ensure_logged_in", return_value=False), \
+         patch("andro_cfw.cli.deploy_worker") as mock_deploy:
+        assert cmd_init(args) == 1
+    mock_deploy.assert_not_called()
+
+
+def test_ensure_logged_in_skips_the_prompt_when_credentials_exist():
+    from andro_cfw.cli import _ensure_logged_in
+
+    with patch("andro_cfw.cli.stored_account_labels", return_value=["default"]), \
+         patch("andro_cfw.cli._prompt_api_token") as mock_prompt, \
+         patch("andro_cfw.cli.login") as mock_login:
+        assert _ensure_logged_in("default") is True
+    mock_prompt.assert_not_called()
+    mock_login.assert_not_called()
+
+
+def test_ensure_logged_in_prefers_the_environment_over_prompting():
+    """argv and prompts both cost the user something; an env var costs nothing."""
+    from andro_cfw.cli import _ensure_logged_in
+
+    with patch("andro_cfw.cli.stored_account_labels", return_value=[]), \
+         patch("andro_cfw.cli._prompt_api_token") as mock_prompt, \
+         patch("andro_cfw.cli.login") as mock_login, \
+         patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "cf-token-value"}):
+        assert _ensure_logged_in("default") is True
+
+    mock_prompt.assert_not_called()
+    assert mock_login.call_args.args[0] == "cf-token-value"
+
+
+def test_ensure_logged_in_reports_a_rejected_token():
+    from andro_cfw.cli import _ensure_logged_in
+    from andro_cfw.errors import DeploymentError as DE
+
+    with patch("andro_cfw.cli.stored_account_labels", return_value=[]), \
+         patch("andro_cfw.cli._prompt_api_token", return_value="bad-token"), \
+         patch("andro_cfw.cli.login", side_effect=DE("Cloudflare API error")):
+        assert _ensure_logged_in("default") is False
+
+
+def test_help_does_not_leak_argparse_internals(capsys):
+    """
+    A literal '%' in a help string makes argparse interpolate its own action
+    dict into the output. The deploy-serverless help says "100% serverless".
+    """
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    out = capsys.readouterr().out
+    assert "100% serverless" in out
+    assert "option_strings" not in out
+
+
+def test_every_subcommand_is_reachable(capsys):
+    """Each advertised command must parse; a broken parser is invisible otherwise."""
+    for command in ("login", "daemon", "logs", "init", "status", "check",
+                    "snippet", "remove", "setup-path", "add-account", "serverless"):
+        with pytest.raises(SystemExit) as exc:
+            main([command, "--help"])
+        assert exc.value.code == 0, command

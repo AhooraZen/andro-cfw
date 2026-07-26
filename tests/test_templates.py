@@ -2,18 +2,21 @@
 Guards on the worker template that ships to every user's Cloudflare account.
 
 These are string checks, not a JS test suite -- but each one pins a property
-that regressed at least once, so a plain "does the file look like TypeScript"
-assertion is not enough.
+that regressed at least once, so a plain "does the file parse" assertion is
+not enough.
 """
+
+import re
 
 import pytest
 
+from andro_cfw.cloudflare import WORKER_MODULE_NAME
 from andro_cfw.deploy import _load_template
 
 
 @pytest.fixture(scope="module")
 def worker() -> str:
-    return _load_template("worker.ts")
+    return _load_template("worker.mjs")
 
 
 def test_worker_template_structure(worker):
@@ -64,19 +67,12 @@ def test_webhook_path_is_matched_exactly(worker):
 def test_no_hardcoded_demo_bot(worker):
     """The template is a proxy, not a novelty bot shipped to every deployment."""
     for leftover in ("I'm Useless", "Pong!", "/echo ", "Cloudflare Anycast POP"):
-        assert leftover not in worker, f"demo bot leftover in worker.ts: {leftover}"
+        assert leftover not in worker, f"demo bot leftover in worker.mjs: {leftover}"
 
 
 def test_hop_by_hop_headers_are_not_relayed(worker):
     assert "HOP_BY_HOP" in worker
     assert "transfer-encoding" in worker
-
-
-def test_wrangler_template_renders():
-    tmpl = _load_template("wrangler.toml.tmpl")
-    rendered = tmpl.format(worker_name="andro-cfw-abcd1234")
-    assert 'name = "andro-cfw-abcd1234"' in rendered
-    assert 'main = "worker.ts"' in rendered
 
 
 def test_upstream_origin_is_configurable(worker):
@@ -94,3 +90,38 @@ def test_upstream_origin_falls_back_on_bad_input(worker):
     assert "DEFAULT_TELEGRAM_ORIGIN" in worker
     assert 'parsed.protocol !== "https:"' in worker
     assert "parsed.origin" in worker
+
+
+# --------------------------------------------------------------------------- #
+# Valid for direct upload to the Cloudflare API
+# --------------------------------------------------------------------------- #
+
+def test_worker_template_has_no_typescript_only_syntax(worker):
+    """
+    The template is uploaded verbatim -- there is no bundler and no type
+    stripper on that path -- so TypeScript syntax does not fail a build here,
+    it fails at runtime in every user's deployed worker.
+    """
+    for token in ("export interface", ": Promise<", "as any", "@ts-ignore"):
+        assert token not in worker, f"TypeScript-only syntax in worker.mjs: {token}"
+
+    assert "async fetch(request, env)" in worker
+    assert re.search(r"async fetch\([^)]*:", worker) is None
+
+
+def test_worker_template_is_an_es_module(worker):
+    """
+    upload_worker declares a main_module, which only accepts the ES module
+    format; the older service-worker style would be rejected.
+    """
+    assert "export default {" in worker
+    assert "module.exports" not in worker
+    assert 'addEventListener("fetch"' not in worker
+
+
+def test_worker_template_filename_matches_the_uploaded_module_name(worker):
+    """
+    The multipart part name, the metadata main_module and the file on disk all
+    have to agree, or the upload succeeds with no entry point.
+    """
+    assert _load_template(WORKER_MODULE_NAME) == worker

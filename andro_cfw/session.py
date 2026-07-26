@@ -276,6 +276,29 @@ class CFWSession:
             self._lb.start()
         return self._lb
 
+    def _proxy_base_url(self) -> Optional[str]:
+        """
+        Where this process should send Bot API traffic.
+
+        A daemon started with `andro-cfw daemon` is preferred whenever one is
+        running, even for a single-account session: it is shared between every
+        bot on the machine, so quota accounting and failover state stay
+        consistent instead of each process keeping its own view.
+        """
+        if os.environ.get("ANDRO_CFW_NO_DAEMON", "").strip().lower() in ("1", "true", "yes"):
+            return None
+
+        from .daemon import find_running_daemon
+
+        running = find_running_daemon()
+        if running:
+            return running
+
+        # No shared daemon. Multi-account sessions still need balancing, so
+        # fall back to an in-process one; a single worker needs no proxy.
+        lb = self._get_load_balancer()
+        return lb.base_url() if lb is not None else None
+
     # ---------------------------------------------------------------- #
     # Convenience accessors for popular Telegram libraries
     # ---------------------------------------------------------------- #
@@ -284,13 +307,16 @@ class CFWSession:
         """
         Base URL to point Telegram libraries at, no trailing slash.
 
-        - Single-account sessions: the workers.dev URL directly.
-        - Multi-account sessions: the local smart load-balancer URL,
-          started automatically in this process.
+        Order of preference:
+          1. A daemon started with `andro-cfw daemon`, if one is running.
+          2. An in-process load balancer, for multi-account sessions.
+          3. The workers.dev URL directly, for a single account.
+
+        Set ANDRO_CFW_NO_DAEMON=1 to skip step 1.
         """
-        lb = self._get_load_balancer()
-        if lb is not None:
-            return lb.base_url()
+        proxied = self._proxy_base_url()
+        if proxied:
+            return proxied
         if not self.worker_url:
             raise SessionNotFoundError(
                 "This session has no deployed worker. "

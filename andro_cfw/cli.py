@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .auth import cloudflare_login
+from .cloudflare import TOKEN_HELP, stored_account_labels
 from .colors import (
     COLOR_BOLD,
     COLOR_CYAN,
@@ -29,7 +29,7 @@ from .colors import (
     log_warn,
     log_working,
 )
-from .deploy import deploy_worker, put_worker_secret, teardown_worker
+from .deploy import deploy_worker, login, put_worker_secret, teardown_worker
 from .errors import AndroCFWError
 from .platform_utils import add_to_user_path
 from .session import DEFAULT_SESSION_FILENAME, CFWSession, require_http_url
@@ -37,6 +37,49 @@ from .session import DEFAULT_SESSION_FILENAME, CFWSession, require_http_url
 
 def _session_path(args: argparse.Namespace) -> Path:
     return Path(args.path) / DEFAULT_SESSION_FILENAME if args.path else Path.cwd() / DEFAULT_SESSION_FILENAME
+
+
+def _prompt_api_token(label: str) -> str | None:
+    """
+    Read a Cloudflare API token without echoing it.
+
+    Deliberately not a --token flag by default: command-line arguments are
+    readable by every process on the machine via /proc.
+    """
+    print(f"\n{COLOR_BOLD}Cloudflare API token for '{label}'{COLOR_RESET}")
+    log_dim(TOKEN_HELP)
+    try:
+        return getpass.getpass("  Token (input hidden): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        return None
+
+
+def _ensure_logged_in(label: str, token: str | None = None,
+                      account_id: str | None = None) -> bool:
+    """Store credentials for `label` if none exist yet. Returns success."""
+    if label in stored_account_labels() and not token:
+        return True
+
+    token = token or os.environ.get("CLOUDFLARE_API_TOKEN") or _prompt_api_token(label)
+    if not token:
+        log_warn("\nCancelled.")
+        return False
+
+    try:
+        login(token, account_label=label, account_id=account_id)
+    except AndroCFWError as exc:
+        log_error(f"{exc}")
+        return False
+    return True
+
+
+def cmd_login(args: argparse.Namespace) -> int:
+    label = args.account or "default"
+    token = getattr(args, "token", None)
+    if not _ensure_logged_in(label, token=token, account_id=getattr(args, "account_id", None)):
+        return 1
+    log_info(f"Stored accounts: {', '.join(stored_account_labels())}")
+    return 0
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -50,21 +93,24 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     try:
         if num_accounts == 1:
-            cloudflare_login()
+            if not _ensure_logged_in("default"):
+                return 1
             worker_name, worker_url = deploy_worker(worker_name=args.name)
             session = CFWSession.new(worker_name=worker_name, worker_url=worker_url)
         else:
             log_info(
                 f"Multi-account load-balanced mode: setting up {num_accounts} "
-                "Cloudflare accounts. You'll be asked to log in once per account "
-                "(each in its own isolated browser/OAuth session) -- log in with a "
-                "DIFFERENT Cloudflare account each time.\n"
+                "Cloudflare accounts. Each free account carries its own "
+                "100,000 requests/day, and andro-cfw moves between them "
+                "automatically. You need one API token per account -- create "
+                "each from a DIFFERENT Cloudflare account.\n"
             )
             entries = []
             for i in range(1, num_accounts + 1):
                 label = f"account-{i}"
                 print(f"\n--- Account {i}/{num_accounts} ({label}) ---")
-                cloudflare_login(account_label=label)
+                if not _ensure_logged_in(label):
+                    return 1
                 name = f"{args.name}-{i}" if args.name else None
                 worker_name, worker_url = deploy_worker(worker_name=name, account_label=label)
                 entries.append((worker_name, worker_url, label))
@@ -84,14 +130,14 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"  Worker name : {session.worker_name}")
         print(f"  Worker URL  : {session.worker_url}")
     print(f"  Session file: {saved_path}")
-    print("\nUse it in your bot code (identical whether single- or multi-account):\n")
-    print(f"  {COLOR_CYAN}from andro_cfw import CFWSession{COLOR_RESET}")
-    print(f"  {COLOR_CYAN}session = CFWSession.load(){COLOR_RESET}")
+    print("\nUse it in your bot code:\n")
     print(f"  {COLOR_CYAN}import telebot{COLOR_RESET}")
-    print(f"  {COLOR_CYAN}telebot.apihelper.API_URL = session.telebot_api_url(){COLOR_RESET}")
-    print(f"  {COLOR_CYAN}telebot.apihelper.FILE_URL = session.telebot_file_url(){COLOR_RESET}")
+    print(f"  {COLOR_CYAN}from andro_cfw import patch{COLOR_RESET}")
+    print(f"  {COLOR_CYAN}patch(){COLOR_RESET}")
     print(f"  {COLOR_CYAN}bot = telebot.TeleBot('<YOUR_BOT_TOKEN>'){COLOR_RESET}")
     print(f"  {COLOR_CYAN}bot.infinity_polling(){COLOR_RESET}\n")
+    if len(session.workers) > 1:
+        log_notice("Run `andro-cfw daemon` to share one balancer across all your bots.")
     return 0
 
 
@@ -105,8 +151,9 @@ def cmd_add_account(args: argparse.Namespace) -> int:
 
     next_num = len(session.workers) + 1
     label = f"account-{next_num}"
+    if not _ensure_logged_in(label):
+        return 1
     try:
-        cloudflare_login(account_label=label)
         name = f"{args.name}-{next_num}" if args.name else None
         worker_name, worker_url = deploy_worker(worker_name=name, account_label=label)
     except AndroCFWError as exc:
@@ -129,17 +176,119 @@ def cmd_status(args: argparse.Namespace) -> int:
         log_error(f"{exc}")
         return 1
 
+    from .daemon import CONTROL_PREFIX, daemon_status
+    from .store import FREE_PLAN_DAILY_REQUESTS, UsageStore
+
+    status = daemon_status()
+    if status["running"]:
+        print(f"Daemon      : {COLOR_GREEN}running{COLOR_RESET} at {status['base_url']} (pid {status['pid']})")
+        print(f"Dashboard   : {status['base_url']}{CONTROL_PREFIX}/")
+    else:
+        print(f"Daemon      : {COLOR_YELLOW}not running{COLOR_RESET}  (start it with `andro-cfw daemon`)")
+
     print(f"Created at  : {session.created_at}")
+
+    store = UsageStore()
+    try:
+        usage = store.usage_summary()
+    finally:
+        store.close()
+
     if len(session.workers) > 1:
         print(f"Mode        : multi-account load balancing ({len(session.workers)} accounts)")
-        for i, w in enumerate(session.workers):
-            marker = " <- active" if i == session.active_index else ""
-            state = "exhausted (waiting for daily reset)" if w.exhausted_until > time.time() else "available"
-            print(f"  [{i}] {w.account_label}: {w.worker_name} -> {w.worker_url} [{state}]{marker}")
-    else:
-        print(f"Worker name : {session.worker_name}")
-        print(f"Worker URL  : {session.worker_url}")
+    for i, w in enumerate(session.workers):
+        marker = " <- active" if i == session.active_index else ""
+        state = "exhausted (waiting for daily reset)" if w.exhausted_until > time.time() else "available"
+        used = usage.get(w.worker_name, 0)
+        share = used / FREE_PLAN_DAILY_REQUESTS * 100
+        label = w.account_label or w.worker_name
+        print(f"  [{i}] {label}: {w.worker_name} -> {w.worker_url}")
+        print(f"      {state}, {used:,} requests today ({share:.1f}% of daily quota){marker}")
+
+    if not usage:
+        log_dim("No request counts yet -- they are recorded once traffic goes through the daemon.")
     return 0
+
+
+def cmd_daemon(args: argparse.Namespace) -> int:
+    """Run the shared proxy in the foreground."""
+    from .daemon import Daemon, find_running_daemon
+
+    already = find_running_daemon()
+    if already:
+        log_warn(f"A daemon is already running at {already}.")
+        log_dim("Stop that one first, or just point your bots at it.")
+        return 1
+
+    try:
+        session = CFWSession.load(str(_session_path(args)) if args.path else None)
+    except AndroCFWError as exc:
+        log_error(f"{exc}")
+        return 1
+
+    daemon = Daemon(session, port=args.port, headroom=args.headroom)
+    daemon.serve_forever()
+    return 0
+
+
+def _relative_time(then: float, now: float) -> str:
+    delta = max(0, int(now - then))
+    if delta < 60:
+        return f"{delta}s ago"
+    if delta < 3600:
+        return f"{delta // 60}m ago"
+    if delta < 86400:
+        return f"{delta // 3600}h ago"
+    return f"{delta // 86400}d ago"
+
+
+EVENT_COLORS = {
+    "failover": COLOR_YELLOW,
+    "quota": COLOR_YELLOW,
+    "retry": COLOR_CYAN,
+    "error": COLOR_RED,
+    "daemon_start": COLOR_GREEN,
+}
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    """
+    Show the proxy's own event log.
+
+    These are andro-cfw's records -- failovers, retries, quota trips -- not the
+    Worker's console output. Cloudflare's live tail needs a WebSocket session
+    that would drag in a dependency, and for debugging load balancing this is
+    the more useful log anyway.
+    """
+    from .store import UsageStore
+
+    store = UsageStore()
+    try:
+        seen = set()
+        while True:
+            events = list(reversed(store.recent_events(limit=args.limit)))
+            now = time.time()
+            for event in events:
+                key = (event["at"], event["kind"], event["worker_name"], event["detail"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                color = EVENT_COLORS.get(event["kind"], COLOR_RESET)
+                when = _relative_time(event["at"], now)
+                worker = event["worker_name"] or "-"
+                detail = f"  {event['detail']}" if event["detail"] else ""
+                print(f"  {when:>9}  {color}{event['kind']:<13}{COLOR_RESET} {worker}{detail}")
+
+            if not events and not seen:
+                log_dim("No events recorded yet. Start the daemon and send some traffic.")
+
+            if not args.follow:
+                return 0
+            time.sleep(2)
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        store.close()
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
@@ -464,10 +613,37 @@ def main(argv=None) -> int:
         formatter_class=ColoredHelpFormatter,
     )
     from . import __version__
+    from .daemon import DEFAULT_DAEMON_PORT
+    from .store import DEFAULT_QUOTA_HEADROOM
     parser.add_argument("--version", action="version", version=f"andro-cfw {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init", help="Log into Cloudflare and deploy the proxy worker(s) for this project.", formatter_class=ColoredHelpFormatter)
+    p_login = sub.add_parser("login", help="Store a Cloudflare API token (replaces the old wrangler browser login).", formatter_class=ColoredHelpFormatter)
+    p_login.add_argument("--account", help="Account label for multi-account setups (default: 'default')")
+    p_login.add_argument("--account-id", help="Cloudflare account id, if the token can see more than one")
+    p_login.add_argument(
+        "--token",
+        help="API token. Prefer $CLOUDFLARE_API_TOKEN or the hidden prompt: "
+             "argv is readable by every process on the machine.",
+    )
+    p_login.set_defaults(func=cmd_login)
+
+    p_daemon = sub.add_parser("daemon", help="Run the shared local proxy every bot on this machine can use.", formatter_class=ColoredHelpFormatter)
+    p_daemon.add_argument("--port", type=int, default=DEFAULT_DAEMON_PORT, help=f"Port to listen on (default: {DEFAULT_DAEMON_PORT})")
+    p_daemon.add_argument("--path", help="Project directory (default: current directory)")
+    p_daemon.add_argument(
+        "--headroom", type=float, default=DEFAULT_QUOTA_HEADROOM,
+        help="Fraction of the daily quota to use before moving to the next "
+             f"account (default: {DEFAULT_QUOTA_HEADROOM}).",
+    )
+    p_daemon.set_defaults(func=cmd_daemon)
+
+    p_logs = sub.add_parser("logs", help="Show the proxy's failover, retry and quota events.", formatter_class=ColoredHelpFormatter)
+    p_logs.add_argument("--follow", "-f", action="store_true", help="Keep printing new events as they happen")
+    p_logs.add_argument("--limit", "-n", type=int, default=50, help="How many past events to show (default: 50)")
+    p_logs.set_defaults(func=cmd_logs)
+
+    p_init = sub.add_parser("init", help="Deploy the proxy worker(s) for this project.", formatter_class=ColoredHelpFormatter)
     p_init.add_argument("--name", help="Custom worker name (default: random andro-cfw-xxxxxxxx)")
     p_init.add_argument("--path", help="Project directory (default: current directory)")
     p_init.add_argument("--force", action="store_true", help="Overwrite an existing cfw.session")
@@ -479,7 +655,7 @@ def main(argv=None) -> int:
     )
     p_init.set_defaults(func=cmd_init)
 
-    p_serverless = sub.add_parser("deploy-serverless", aliases=["serverless", "deploy-webhook"], help="Deploy a 100% serverless 24/7 Telegram bot to Cloudflare Edge.", formatter_class=ColoredHelpFormatter)
+    p_serverless = sub.add_parser("deploy-serverless", aliases=["serverless", "deploy-webhook"], help="Deploy a 100%% serverless 24/7 Telegram bot to Cloudflare Edge.", formatter_class=ColoredHelpFormatter)
     p_serverless.add_argument(
         "--token",
         help="Telegram bot token from @BotFather. Prefer $TELEGRAM_BOT_TOKEN or the "

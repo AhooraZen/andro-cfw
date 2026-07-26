@@ -15,24 +15,35 @@ In countries like Iran where `api.telegram.org` is network-filtered, developers 
 
 **andro-cfw** solves this with a simple trick: it deploys a Cloudflare Worker as a reverse proxy between your bot and Telegram:
 
-
 ```
 Your Bot (Python / JS / PHP)  ←→  Cloudflare Worker (unfiltered)  ←→  api.telegram.org
 ```
 
 Cloudflare's edge network is reachable from restricted regions even when Telegram's API is not, so your bot talks to the Worker and the Worker talks to Telegram.
 
+With several Cloudflare accounts pooled together, a shared local daemon sits in the middle and picks the healthiest one for you:
+
+```
+Bot A ┐
+Bot B ┼→  andro-cfw daemon (127.0.0.1)  →  Worker #1 / #2 / #3  →  api.telegram.org
+Bot C ┘         counts + routes + retries
+```
+
 ---
 
 ## ✨ Key Features
 
 - 🔒 **Zero VPN Required** — No VPN needed on your dev machine, server, or during webhook setup.
+- 🐍 **Pure Python install** — `pip install andro-cfw` is the whole setup. Deployment speaks to the Cloudflare REST API over HTTPS, so there is no Node.js toolchain, no package manager to invoke, and nothing that asks for `sudo`.
 - ☁️ **100% Serverless Cloud Bots** — Run real Telegram bots 24/7 directly inside Cloudflare Workers (0 laptop or server required).
+- 🧠 **Shared Proxy Daemon (`andro-cfw daemon`)** — One long-lived local proxy that every bot on the machine shares, instead of one private balancer per bot process.
+- 📈 **Exact Quota Accounting** — The daemon proxies every request, so it counts them and rotates accounts **before** the 100,000/day free-tier limit, not after a 429.
+- 📊 **Local Dashboard** — Worker health, per-account quota, a latency chart, and a failover log at `http://127.0.0.1:8787/__andro/`.
 - 🐍 **1-Line Auto-Patcher (`andro_cfw.patch()`)** — Auto-detects and patches the imported HTTP Bot API framework: `telebot`, `python-telegram-bot`, or `aiogram`. (MTProto clients such as pyrogram/hydrogram/telethon cannot be routed through an HTTP proxy — `patch()` warns instead of failing silently.)
-- 🔀 **Multi-Account Load Balancing** — Pool several Cloudflare accounts' free-tier quotas (100k req/day per account) with automatic failover and daily auto-resets.
+- 🔀 **Multi-Account Load Balancing** — Pool several Cloudflare accounts' free-tier quotas (100k req/day per account) with latency-aware routing and daily auto-resets.
 - ⚡ **Snippet & Webhook Generator (`andro-cfw serverless`)** — 1-command deployment of 100% serverless bots with interactive prompts.
 - 🔍 **Live Latency & Health Checks (`andro-cfw check`)** — Test live connection speed and Keep-Alive ping latency across deployed workers.
-- 🔐 **Encrypted Session Storage** — Local session files are encrypted with Fernet (AES-128 + HMAC).
+- 🔐 **Encrypted Local Storage** — The session file and your Cloudflare API tokens are encrypted with Fernet (AES-128 + HMAC).
 
 ---
 
@@ -44,6 +55,8 @@ source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install andro-cfw
 ```
 
+That is the entire installation. Nothing else is downloaded, compiled, or installed on your system.
+
 ### Registered Executable / PATH Setup
 
 If running `andro-cfw` in your terminal gives `command not found`, register it safely into your User PATH:
@@ -51,6 +64,80 @@ If running `andro-cfw` in your terminal gives `command not found`, register it s
 ```bash
 python -m andro_cfw.cli setup-path
 ```
+
+---
+
+## 🔑 Step 1 — Log in with a Cloudflare API token (`andro-cfw login`)
+
+andro-cfw authenticates with a scoped **API token** that you create once:
+
+1. Open [`https://dash.cloudflare.com/profile/api-tokens`](https://dash.cloudflare.com/profile/api-tokens).
+2. **Create Token** → pick the **"Edit Cloudflare Workers"** template → **Continue to summary** → **Create Token**.
+3. Copy the token (Cloudflare shows it exactly once), then:
+
+```bash
+andro-cfw login
+```
+
+Paste the token at the hidden prompt. andro-cfw verifies it against the Cloudflare API, resolves your account ID, and stores it encrypted with Fernet — the same local key that protects `cfw.session` — at `~/.andro_cfw/credentials`, mode `0600`.
+
+That template grants exactly what is needed (`Workers Scripts:Edit`) and nothing more. If your token can see more than one Cloudflare account, andro-cfw lists them and asks you to choose with `--account-id` rather than guessing.
+
+## 🚀 Step 2 — Deploy your worker (`andro-cfw init`)
+
+```bash
+andro-cfw init                 # one account, one worker
+andro-cfw init --accounts 3    # a load-balanced pool of three
+```
+
+The worker source is uploaded straight to the Cloudflare API, the `workers.dev` route is enabled, and the resulting URL is saved into an encrypted `cfw.session` in your project directory.
+
+---
+
+## 🧠 The shared proxy daemon (`andro-cfw daemon`)
+
+Run one daemon per machine:
+
+```bash
+andro-cfw daemon
+```
+
+It binds to `127.0.0.1` only, and every bot you start afterwards routes through it — `andro_cfw.patch()` and `CFWSession` pick it up automatically instead of spinning up a private balancer inside each process.
+
+**Why this replaced the in-process balancer.** Previously every bot process started its own load balancer. Three bots meant three balancers, each independently discovering that an account had returned 429, each writing to the same session file, and none of them aware of how much quota the others had already burned. There was no request counting at all — failover was purely reactive, so **every switch cost one failed request**.
+
+The daemon proxies every request itself, so it can simply count them:
+
+- **Counted, not guessed.** Request counts per account per UTC day live in a SQLite database at `~/.andro_cfw/usage.db`.
+- **Rotates early.** An account is retired once it reaches **95%** of the free plan's 100,000 requests/day, so your bot never meets the 429 that used to trigger failover.
+- **Latency-aware.** Among the healthy workers it picks the one with the lowest **median** latency (median, not mean — a single 30-second timeout should not disqualify a good account), rather than simply the lowest index.
+- **Retries transient failures.** A 5xx from the edge is retried with backoff instead of being handed to your bot as an error.
+- **One source of truth.** All bots on the machine share one set of counters, one health view, and one failover decision.
+
+### ⚠️ What the counters do *not* cover
+
+**Webhook traffic goes from Telegram directly to your Worker and never passes through the daemon.** Nothing on your machine sees those requests, so they cannot be counted.
+
+The numbers in the dashboard therefore cover **long-polling and outbound Bot API calls only**. If your bot is webhook-driven, expect the reported usage to read low — sometimes near zero — while your real Cloudflare consumption is much higher. Check the Cloudflare dashboard for the authoritative figure in that case.
+
+---
+
+## 📊 Local dashboard
+
+While the daemon is running, open:
+
+```
+http://127.0.0.1:8787/__andro/
+```
+
+The daemon prints the address on startup; `8787` is the default and `--port` changes it. The page is served by the daemon itself — plain HTML, no external assets, bound to loopback — and shows:
+
+- **Worker health** — which accounts are up, which are cooling off.
+- **Quota consumption per account** — today's counted requests against the 100,000/day allowance.
+- **A latency chart** — median response time per worker over the recent window.
+- **A failover event log** — every switch, quota trip, and exhausted retry, with timestamps.
+
+The same event log is available in the terminal with `andro-cfw logs`.
 
 ---
 
@@ -80,7 +167,7 @@ Point Telegram at your worker and relay every update to your own backend:
 
 | | |
 |---|---|
-| Bot token | Stored via `wrangler secret put BOT_TOKEN`. Never placed in the webhook URL. |
+| Bot token | Uploaded over HTTPS as an encrypted Cloudflare Worker secret (`BOT_TOKEN`). Never placed in the webhook URL. |
 | Webhook auth | A 32-byte secret is passed to `setWebhook(secret_token=...)`; Telegram echoes it in `X-Telegram-Bot-Api-Secret-Token` and the worker rejects any update that does not match. |
 | CORS | Off by default. Set `ALLOWED_ORIGINS` only if a browser must call the worker. |
 
@@ -91,29 +178,27 @@ Point Telegram at your worker and relay every update to your own backend:
 
 ---
 
-### Method B: Full Custom TypeScript / JavaScript Worker Bot
+### Method B: Full Custom JavaScript Worker Bot
 
-If you want to build a full custom serverless bot with interactive buttons, database calls, or custom logic in JavaScript/TypeScript:
+If you want to build a full custom serverless bot with interactive buttons, database calls, or custom logic, write it as a Worker module and paste it into the Cloudflare dashboard (**Workers & Pages** → your worker → **Edit code**).
 
-#### 1. `worker.ts` Code:
+The shipped template is `worker.mjs` — plain ES module JavaScript. The upload API has no bundler, so whatever the worker runs must already be valid JavaScript; TypeScript has to be compiled first if you prefer writing it.
 
-```typescript
-export interface Env {
-  BOT_TOKEN?: string;
-}
+#### 1. `worker.mjs` code:
 
+```javascript
 const TELEGRAM_ORIGIN = "https://api.telegram.org";
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request, env) {
     const url = new URL(request.url);
 
-    // 1. Webhook Update Handler (POST /webhook)
+    // 1. Webhook update handler (POST /webhook)
     if (request.method === "POST" && url.pathname.includes("/webhook")) {
       try {
-        // Extract token from query parameter or Env
-        const token = url.searchParams.get("token") || env.BOT_TOKEN;
-        const update = (await request.json()) as any;
+        // The token comes from the Worker secret, never from the request.
+        const token = env.BOT_TOKEN;
+        const update = await request.json();
 
         if (update && update.message && update.message.text && token) {
           const chatId = update.message.chat.id;
@@ -121,7 +206,7 @@ export default {
 
           let replyText = "";
 
-          // Custom Bot Command Logic
+          // Custom bot command logic
           if (text === "/start") {
             replyText = "👋 Hello! I am running 100% Serverless on Cloudflare Edge!";
           } else if (text === "/ping") {
@@ -150,13 +235,12 @@ export default {
       return new Response("OK", { status: 200 });
     }
 
-    // 2. Reverse Proxy Pass-through for local/external bots
+    // 2. Reverse proxy pass-through for local/external bots
     const targetUrl = TELEGRAM_ORIGIN + url.pathname + url.search;
     return fetch(targetUrl, {
       method: request.method,
       headers: request.headers,
       body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
-      // @ts-ignore
       duplex: "half",
     });
   },
@@ -192,17 +276,21 @@ if __name__ == "__main__":
     bot.infinity_polling(timeout=20, long_polling_timeout=20)
 ```
 
+Start `andro-cfw daemon` first if you want quota accounting, latency-aware routing, and the dashboard; the bot code above does not change either way.
+
 ---
 
 ### Method D: PHP / External Webhook Backend Mode (`FORWARD_WEBHOOK_URL`)
 
-If you have an existing PHP, Node.js, Python, or Go webhook bot hosted on your own server or cPanel, you can use Cloudflare Worker as a **Webhook Filter Bypass**:
+If you have an existing PHP, Python, or Go webhook bot hosted on your own server or cPanel, you can use Cloudflare Worker as a **Webhook Filter Bypass**:
 
-1. Set the backend URL as a Worker secret (or pass `--forward-url` to
-   `andro-cfw serverless`, which does this for you):
+1. Point the worker at your backend. The easy way is to let andro-cfw store the
+   secret for you while deploying:
    ```bash
-   npx wrangler secret put FORWARD_WEBHOOK_URL --name <your-worker-name>
+   andro-cfw serverless --forward-url https://your-server.com/my_bot_webhook.php
    ```
+   You can also set `FORWARD_WEBHOOK_URL` by hand in the Cloudflare dashboard
+   under **Workers & Pages → your worker → Settings → Variables and Secrets**.
 2. Every update Telegram sends to your Worker is forwarded verbatim to your
    backend, so the network filter never touches your server.
 
@@ -232,12 +320,11 @@ andro-cfw snippet -f ptb -o bot.py
 
 By default the worker proxies to `https://api.telegram.org`. Point it at your own
 [`telegram-bot-api`](https://github.com/tdlib/telegram-bot-api) instance to lift
-Telegram's 50 MB upload cap or keep media on your own infrastructure:
+Telegram's 50 MB upload cap or keep media on your own infrastructure.
 
-```bash
-npx wrangler secret put UPSTREAM_API_ORIGIN --name <your-worker-name>
-# e.g. https://bot-api.your-server.com
-```
+Set `UPSTREAM_API_ORIGIN` on the deployed worker from the Cloudflare dashboard
+(**Workers & Pages → your worker → Settings → Variables and Secrets**), for
+example `https://bot-api.your-server.com`.
 
 Only the origin is used — any path or query in the value is dropped, and a
 malformed or non-http(s) value falls back to `api.telegram.org` rather than
@@ -245,11 +332,10 @@ sending traffic somewhere unintended.
 
 ### Large uploads and downloads
 
-The local load balancer (multi-account mode) streams request and response
-bodies rather than buffering them. Request bodies stay in memory up to 1 MB and
-spill to a temp file above that, so concurrent file transfers do not pin RAM —
-while still being replayable if a worker hits its quota mid-request and the
-balancer has to fail over.
+The daemon streams request and response bodies rather than buffering them.
+Request bodies stay in memory up to 1 MB and spill to a temp file above that, so
+concurrent file transfers do not pin RAM — while still being replayable if a
+worker has to be swapped mid-request.
 
 ---
 
@@ -275,22 +361,55 @@ Output example:
 
 | Command                          | Description                                                          |
 |-----------------------------------|------------------------------------------------------------------------|
-| `andro-cfw init`                  | Log into Cloudflare and deploy a single proxy worker.                  |
-| `andro-cfw init --accounts 3`     | Log into 3 Cloudflare accounts and deploy a load-balanced worker pool. |
-| `andro-cfw serverless`            | Deploy a 100% serverless 24/7 Telegram bot to Cloudflare Edge.        |
+| `andro-cfw login`                 | Store a Cloudflare API token, encrypted, for later deployments.        |
+| `andro-cfw init`                  | Deploy a single proxy worker and create `cfw.session`.                 |
+| `andro-cfw init --accounts 3`     | Deploy a load-balanced pool across 3 Cloudflare accounts.              |
+| `andro-cfw daemon`                | Run the shared local proxy + dashboard that all your bots route through. |
+| `andro-cfw serverless`            | Deploy a 100% serverless 24/7 Telegram bot to Cloudflare Edge.         |
 | `andro-cfw add-account`           | Add one more Cloudflare account/worker to an existing session.         |
 | `andro-cfw snippet -f telebot`    | Generate ready-to-run Python code for telebot, ptb, aiogram, or the `patch()` one-liner. |
 | `andro-cfw check`                 | Test live network connectivity and ping response times of deployed worker(s). |
 | `andro-cfw status`                | Show the worker(s) saved for this project, and per-account health.     |
+| `andro-cfw logs`                  | Print recent daemon events: failovers, quota trips, exhausted retries.  |
 | `andro-cfw setup-path`            | Safely add andro-cfw executable directory to User PATH.                |
 | `andro-cfw remove`                | Delete the deployed worker(s) and local `cfw.session`.                 |
+
+---
+
+## 🔄 Migrating from 0.4.x
+
+Everything you deployed still works — the worker on Cloudflare is unchanged from
+your bot's point of view, and your existing `cfw.session` is read as-is.
+
+Two things to do, one thing you can clean up:
+
+1. **Authenticate again, with an API token.** The old browser OAuth flow is gone.
+   Create a token with the **"Edit Cloudflare Workers"** template at
+   [`https://dash.cloudflare.com/profile/api-tokens`](https://dash.cloudflare.com/profile/api-tokens)
+   and run `andro-cfw login` (once per account, if you run a pool). Until you do,
+   any command that touches Cloudflare will tell you to log in.
+2. **Start the daemon.** `andro-cfw daemon` gives you quota accounting, early
+   rotation, and the dashboard. Without it your bots still work; they simply
+   route directly and nothing is counted.
+3. **Node.js is no longer used.** If an earlier version of andro-cfw installed
+   Node.js on your machine, nothing here needs it any more — uninstall it if you
+   installed it only for this tool. The `ANDRO_CFW_ALLOW_NODESOURCE` and
+   `ANDRO_CFW_NO_AUTO_INSTALL` environment variables no longer do anything and
+   can be removed from your shell profile.
+
+Your bot code does not change. `andro_cfw.patch()`, `CFWSession`, and the
+generated snippets all keep the same API.
 
 ---
 
 ## 🔐 Security Notes
 
 - **`cfw.session` is encrypted** with Fernet (AES-128-CBC + HMAC). Key stored in `~/.andro_cfw/key`.
+- **Your Cloudflare API token is encrypted too**, in `~/.andro_cfw/credentials` (mode `0600`), with the same key. Delete that file to log out.
+- Use the **"Edit Cloudflare Workers"** token template. It grants `Workers Scripts:Edit` and nothing else — a leaked token cannot touch your DNS, your zones, or your billing.
 - **Add `cfw.session` to `.gitignore`**.
+- **Nothing is installed with elevated privileges.** andro-cfw is a pure-Python package that makes HTTPS calls; it never invokes a package manager and never asks for `sudo`.
+- The daemon and its dashboard bind to `127.0.0.1` only.
 - The generated worker is a **pure pass-through proxy**: it does not log, store, or inspect bot tokens or updates.
 
 ---

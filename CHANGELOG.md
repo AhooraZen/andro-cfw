@@ -7,6 +7,147 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v1.0.0] - 2026-07-26
+
+The release that removes Node.js. **Contains breaking changes** — every user
+must re-authenticate; see the migration notes at the end of this entry.
+
+### 💥 Breaking
+
+- **`wrangler` and Node.js are gone.** Every Cloudflare operation used to shell
+  out to `npx wrangler`, which meant the package had to put a working Node.js on
+  the user's machine first: ~250 lines in `andro_cfw/toolchain.py` that probed
+  for `apt` / `dnf` / `pacman` / `zypper` / `apk` / `brew` / `winget`, ran the
+  matching install command, and — on Debian and Ubuntu — could pipe a downloaded
+  NodeSource shell script into `sudo bash`. Deploying a Worker is a handful of
+  ordinary HTTPS calls, so none of that was ever necessary. Installing
+  andro-cfw is now `pip install andro-cfw` and nothing else.
+- **Authentication is a Cloudflare API token, not `wrangler login`.** The OAuth
+  browser flow (`andro_cfw/auth.py`, per-account `WRANGLER_HOME` directories) is
+  replaced by **`andro-cfw login`**. Create a token at
+  <https://dash.cloudflare.com/profile/api-tokens> → Create Token → the
+  **"Edit Cloudflare Workers"** template, which grants exactly
+  `Workers Scripts:Edit`. **Every 0.4.x user must run `andro-cfw login` once per
+  account before any command that touches Cloudflare will work.**
+- **Modules deleted:** `andro_cfw/auth.py`, `andro_cfw/toolchain.py`,
+  `andro_cfw/templates/worker.ts`, `andro_cfw/templates/wrangler.toml.tmpl`.
+- **The worker template is `worker.mjs`,** plain ES module JavaScript. The
+  Workers upload API has no bundler and will not accept TypeScript, so the
+  source that ships must already be valid JavaScript. Custom workers written in
+  TypeScript now have to be compiled before upload.
+- **`ANDRO_CFW_ALLOW_NODESOURCE` and `ANDRO_CFW_NO_AUTO_INSTALL` no longer
+  exist.** Both existed to control an installer that is gone; they are silently
+  ignored and can be dropped from shell profiles.
+- **The per-process load balancer is replaced by a shared daemon.**
+  `andro-cfw daemon` is now the supported way to run a multi-account pool.
+
+### 🔒 Security
+
+- **No code path can install software or ask for `sudo` any more.** The removal
+  of `toolchain.py` takes with it the `curl … | sudo bash` NodeSource path
+  (opt-in since v0.4.0, but still present), every system package-manager
+  invocation, and the privilege escalation they required. andro-cfw is now a
+  pure-Python package that makes HTTPS requests.
+- **API tokens are stored encrypted.** `~/.andro_cfw/credentials` is Fernet
+  encrypted with the same local key that protects `cfw.session` and written
+  `0600`. Previously, wrangler's OAuth refresh tokens sat in plaintext JSON in
+  the per-account config directories.
+- **Least-privilege credentials.** The recommended "Edit Cloudflare Workers"
+  token scope cannot read DNS records, zones, or billing — unlike an OAuth
+  session, which carried the full permissions of the logged-in dashboard user.
+  Cloudflare error codes 10000/9109 are recognised and answered with the exact
+  token-creation instructions instead of a raw API dump.
+- **The daemon and its dashboard bind to `127.0.0.1` only.**
+- **Secret values are never echoed on failure.** `put_worker_secret()` reports
+  the binding name and the Cloudflare error, never the value it tried to store.
+
+### ⚡ Added
+
+- **`andro-cfw daemon` — one shared local proxy per machine.** Every bot process
+  used to start its own load balancer. Three bots meant three balancers: each
+  independently discovering a 429, all writing to the same session file, none
+  aware of what the others had already consumed. The daemon is a single
+  long-lived proxy that all of them share, so there is one set of counters, one
+  health view, and one failover decision.
+- **Exact request accounting (`andro_cfw/store.py`).** Because the daemon
+  proxies every request, it counts them: per worker, per UTC day, in SQLite at
+  `~/.andro_cfw/usage.db` (WAL mode, so the dashboard can read while requests
+  are being recorded; history is pruned to a retention window so the samples
+  table does not grow forever under long polling).
+- **Quota-aware rotation before the limit, not after the failure.** An account
+  is retired at **95%** of the free plan's 100,000 requests/day. Previously
+  there was no request counting at all — failover was purely reactive, so every
+  single switch cost one failed request.
+- **Latency-aware worker selection.** The daemon picks the healthy worker with
+  the lowest *median* recent latency rather than the lowest index. Median, not
+  mean, so one 30-second timeout cannot disqualify an otherwise good account.
+- **Transient 5xx responses are retried with backoff** inside the daemon instead
+  of being handed to the bot as an error.
+- **Local dashboard at `http://127.0.0.1:<port>/__andro/`,** served by the
+  daemon itself: worker health, quota consumption per account, a latency chart,
+  and a failover event log. No external assets, loopback only.
+- **`andro-cfw logs`** prints the same failover/quota/retry event log in the
+  terminal.
+- **`andro-cfw login`** verifies the token against `/user/tokens/verify`,
+  resolves the account id, and stores both encrypted. A token with access to
+  several accounts lists them and asks for `--account-id` rather than guessing
+  one.
+- **`andro_cfw/cloudflare.py` — a minimal Cloudflare REST client.** Upload,
+  workers.dev route, secrets, delete, subdomain and account lookup, over
+  `urllib` with a hand-rolled multipart encoder. No new runtime dependency.
+
+### 🐛 Fixed
+
+- **Quota exhaustion no longer costs a request.** See above: the old balancer
+  could only learn an account was out of quota by being told `429`, so each
+  rotation surfaced one failure to the bot.
+- **Concurrent bots no longer fight over quota state.** Independent balancers
+  writing overlapping `exhausted_until` / `active_index` values to one session
+  file produced decisions based on each process's partial view; the daemon owns
+  that state.
+- **Re-uploading a worker no longer wipes its secrets.** The upload sends
+  `keep_bindings: ["secret_text"]`, so `BOT_TOKEN` and `WEBHOOK_SECRET` survive
+  a redeploy.
+- **A brand-new `workers.dev` hostname is waited for.** The API returns before
+  DNS has propagated, which made a perfectly good deploy look broken; deploys
+  now poll for up to 45 seconds and say so plainly if it is still not resolving.
+- **An account with no `workers.dev` subdomain gets an actionable message**
+  telling the user to claim one in the dashboard, instead of a failed deploy
+  with an empty hostname.
+- **Cloudflare connectivity errors distinguish themselves from Telegram's.**
+  `api.cloudflare.com` is not usually filtered even where `api.telegram.org` is,
+  so a failure there means a genuine network problem and now says that.
+
+### 🧪 Testing & tooling
+
+- `tests/test_auth.py` and `tests/test_toolchain.py` are deleted along with the
+  modules they covered — roughly a fifth of the suite existed to test an
+  installer that no longer ships.
+- New coverage for the REST client (multipart encoding, error-code hinting,
+  account resolution, `keep_bindings`), for the usage store (daily rollover on
+  the UTC boundary, median latency, retention pruning), and for the daemon's
+  pre-emptive rotation at the headroom threshold.
+- Documentation rewritten across `README.md`, `README.en.md` and `README.fa.md`:
+  installation, authentication, the daemon, the dashboard, and a migration
+  section for 0.4.x users.
+
+### 🧭 Migrating from 0.4.x
+
+1. Run **`andro-cfw login`** with a token from the "Edit Cloudflare Workers"
+   template — once per Cloudflare account if you run a pool.
+2. Your existing `cfw.session` keeps working; no re-deploy is required.
+3. Start **`andro-cfw daemon`** if you want counting, early rotation and the
+   dashboard. Bots work without it, they are simply not accounted for.
+4. Node.js installed by an older andro-cfw can be uninstalled.
+
+> **Known limitation:** webhook traffic travels from Telegram directly to the
+> Worker and never passes through the daemon, so the counters and the dashboard
+> cover long-polling and outbound Bot API calls only. For a webhook-driven bot
+> the reported usage reads low — Cloudflare's own dashboard is the authority
+> there.
+
+---
+
 ## [v0.4.0] - 2026-07-26
 
 Security and correctness release. **Contains breaking changes** — read the
@@ -108,7 +249,7 @@ migration notes below before upgrading.
 
 ### 🧪 Testing & tooling
 
-- 76 → **133 tests**. The four `patch()` tests previously asserted against
+- 76 → **201 tests**. The four `patch()` tests previously asserted against
   `MagicMock`, which auto-creates any attribute touched — they passed no matter
   what the code did. They now use real modules and real frozen dataclasses.
 - New coverage: end-to-end load-balancer failover over a real socket, concurrent

@@ -1,14 +1,19 @@
 /**
  * andro-cfw Telegram Bot API reverse proxy & serverless webhook relay.
  *
+ * Plain ES module, not TypeScript: andro-cfw uploads this file straight to the
+ * Cloudflare API, and that path has no bundler or type stripper. Types are
+ * documented in JSDoc instead.
+ *
  * Two capabilities:
- *   1. Pass-through reverse proxy: forwards every request unchanged to
- *      api.telegram.org, so a Telegram library in a filtered region can reach
- *      the Bot API by pointing at this worker instead.
+ *   1. Pass-through reverse proxy: forwards every request unchanged to the
+ *      Bot API, so a Telegram library in a filtered region can reach it by
+ *      pointing at this worker instead.
  *   2. Serverless webhook relay: accepts Telegram updates at POST /webhook,
  *      authenticates them, and forwards them to FORWARD_WEBHOOK_URL.
  *
- * Configuration (all optional, set with `wrangler secret put <NAME>`):
+ * Configuration (all optional, set with `andro-cfw serverless` or the
+ * Cloudflare dashboard):
  *   BOT_TOKEN            Bot token, if the deployment needs one server-side.
  *                        NEVER read from the request URL.
  *   WEBHOOK_SECRET       Shared secret Telegram sends back in the
@@ -25,40 +30,7 @@
  *                        upload cap or keep media on your own infrastructure.
  */
 
-export interface Env {
-  BOT_TOKEN?: string;
-  WEBHOOK_SECRET?: string;
-  FORWARD_WEBHOOK_URL?: string;
-  ALLOWED_ORIGINS?: string;
-  UPSTREAM_API_ORIGIN?: string;
-}
-
 const DEFAULT_TELEGRAM_ORIGIN = "https://api.telegram.org";
-
-/**
- * Resolve the Bot API origin to proxy to.
- *
- * A misconfigured value must not silently become a request to somewhere
- * unexpected, so anything that is not a well-formed http(s) origin falls back
- * to Telegram's own. Any path, query or fragment is dropped -- only the origin
- * is used, since the request's own path is appended to it.
- */
-function upstreamOrigin(env: Env): string {
-  const configured = (env.UPSTREAM_API_ORIGIN || "").trim();
-  if (!configured) return DEFAULT_TELEGRAM_ORIGIN;
-
-  try {
-    const parsed = new URL(configured);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-      console.error(`Ignoring UPSTREAM_API_ORIGIN with unsupported scheme: ${parsed.protocol}`);
-      return DEFAULT_TELEGRAM_ORIGIN;
-    }
-    return parsed.origin;
-  } catch {
-    console.error("Ignoring malformed UPSTREAM_API_ORIGIN; falling back to api.telegram.org.");
-    return DEFAULT_TELEGRAM_ORIGIN;
-  }
-}
 
 /**
  * Hop-by-hop headers must not be forwarded to the origin or echoed back to the
@@ -76,11 +48,36 @@ const HOP_BY_HOP = new Set([
 ]);
 
 /**
+ * Resolve the Bot API origin to proxy to.
+ *
+ * A misconfigured value must not silently become a request to somewhere
+ * unexpected, so anything that is not a well-formed http(s) origin falls back
+ * to Telegram's own. Any path, query or fragment is dropped -- only the origin
+ * is used, since the request's own path is appended to it.
+ */
+function upstreamOrigin(env) {
+  const configured = (env.UPSTREAM_API_ORIGIN || "").trim();
+  if (!configured) return DEFAULT_TELEGRAM_ORIGIN;
+
+  try {
+    const parsed = new URL(configured);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      console.error(`Ignoring UPSTREAM_API_ORIGIN with unsupported scheme: ${parsed.protocol}`);
+      return DEFAULT_TELEGRAM_ORIGIN;
+    }
+    return parsed.origin;
+  } catch {
+    console.error("Ignoring malformed UPSTREAM_API_ORIGIN; falling back to api.telegram.org.");
+    return DEFAULT_TELEGRAM_ORIGIN;
+  }
+}
+
+/**
  * Resolve CORS headers for a request. Returns an empty object unless the
  * deployer opted in via ALLOWED_ORIGINS, so by default this worker is not a
- * general-purpose CORS bypass for api.telegram.org.
+ * general-purpose CORS bypass for the Bot API.
  */
-function corsHeaders(request: Request, env: Env): Record<string, string> {
+function corsHeaders(request, env) {
   const allowed = (env.ALLOWED_ORIGINS || "").trim();
   if (!allowed) return {};
 
@@ -110,7 +107,7 @@ function corsHeaders(request: Request, env: Env): Record<string, string> {
  * Length-independent, timing-safe string comparison. A naive `===` on a secret
  * can leak information about it through response timing.
  */
-function secretsMatch(a: string, b: string): boolean {
+function secretsMatch(a, b) {
   const encoder = new TextEncoder();
   const left = encoder.encode(a);
   const right = encoder.encode(b);
@@ -122,11 +119,7 @@ function secretsMatch(a: string, b: string): boolean {
   return diff === 0;
 }
 
-async function handleWebhook(
-  request: Request,
-  env: Env,
-  cors: Record<string, string>,
-): Promise<Response> {
+async function handleWebhook(request, env, cors) {
   // Telegram echoes the secret configured via setWebhook(secret_token=...).
   // Without it, anyone who learns this URL can inject fabricated updates.
   if (env.WEBHOOK_SECRET) {
@@ -144,7 +137,7 @@ async function handleWebhook(
     });
   }
 
-  let payload: string;
+  let payload;
   try {
     payload = await request.text();
   } catch (err) {
@@ -167,12 +160,7 @@ async function handleWebhook(
   return new Response("OK", { status: 200, headers: cors });
 }
 
-async function handleProxy(
-  request: Request,
-  url: URL,
-  origin: string,
-  cors: Record<string, string>,
-): Promise<Response> {
+async function handleProxy(request, url, origin, cors) {
   const targetUrl = origin + url.pathname + url.search;
 
   const forwardHeaders = new Headers();
@@ -183,12 +171,11 @@ async function handleProxy(
     }
   }
 
-  const init: RequestInit = {
+  const init = {
     method: request.method,
     headers: forwardHeaders,
     body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
-    // @ts-ignore - required by the Workers runtime for streaming request bodies
-    duplex: "half",
+    duplex: "half", // required by the Workers runtime for streaming bodies
   };
 
   try {
@@ -227,7 +214,7 @@ async function handleProxy(
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request, env) {
     const url = new URL(request.url);
     const cors = corsHeaders(request, env);
 
