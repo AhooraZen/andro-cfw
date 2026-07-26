@@ -20,6 +20,11 @@
  *                        X-Telegram-Bot-Api-Secret-Token header. When set,
  *                        /webhook rejects any update without a matching value.
  *   FORWARD_WEBHOOK_URL  Your own backend. Updates are POSTed here verbatim.
+ *   FORWARD_SERVICE      Service binding to another Worker on the same account,
+ *                        used in preference to FORWARD_WEBHOOK_URL. Required
+ *                        when the backend is itself a Worker: a plain fetch()
+ *                        to a workers.dev hostname is NOT dispatched to that
+ *                        Worker, so the update would vanish with no error.
  *   ALLOWED_ORIGINS      Comma-separated browser origins allowed to call this
  *                        worker via CORS, or "*" to allow any. Unset means no
  *                        CORS headers are emitted at all (the safe default:
@@ -129,9 +134,10 @@ async function handleWebhook(request, env, cors) {
     }
   }
 
-  if (!env.FORWARD_WEBHOOK_URL) {
+  const service = env.FORWARD_SERVICE;
+  if (!service && !env.FORWARD_WEBHOOK_URL) {
     // Nothing to relay to. Still 200, so Telegram does not retry forever.
-    return new Response("OK (no FORWARD_WEBHOOK_URL configured)", {
+    return new Response("OK (no forward target configured)", {
       status: 200,
       headers: { "Content-Type": "text/plain", ...cors },
     });
@@ -145,16 +151,30 @@ async function handleWebhook(request, env, cors) {
     return new Response("OK", { status: 200, headers: cors });
   }
 
+  // A service binding calls the target Worker directly, in-network. It is the
+  // only reliable way to reach another Worker: fetch()ing its public hostname
+  // from here is not guaranteed to enter that Worker at all.
+  // A service binding ignores the hostname, but it still shows up in the
+  // target Worker's logs, so make it point at something recognisable.
+  const target = service
+    ? new URL("/", request.url).toString()
+    : env.FORWARD_WEBHOOK_URL;
+  const send = service ? service.fetch.bind(service) : fetch;
+
   try {
-    await fetch(env.FORWARD_WEBHOOK_URL, {
+    const relayed = await send(target, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload,
     });
-  } catch (err) {
-    // Swallow downstream failures: a non-200 makes Telegram redeliver the same
+    // Log rather than propagate: a non-200 makes Telegram redeliver the same
     // update indefinitely, which amplifies a backend outage into a retry loop.
-    console.error("Failed to forward update to FORWARD_WEBHOOK_URL:", err);
+    // But a silent forward is how a broken relay hides, so record it.
+    if (!relayed.ok) {
+      console.error(`Forward target answered ${relayed.status}`);
+    }
+  } catch (err) {
+    console.error("Failed to forward update:", err);
   }
 
   return new Response("OK", { status: 200, headers: cors });

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### 🐛 Fixed
+
+- **Webhook forwarding to another Cloudflare Worker silently dropped every
+  update.** `handleWebhook` relayed with `fetch(env.FORWARD_WEBHOOK_URL, …)`,
+  and a `fetch()` from one Worker to another Worker's `workers.dev` hostname is
+  not dispatched to that Worker. Nothing threw: the relay looked healthy, the
+  worker answered Telegram `200 OK`, `getWebhookInfo` reported no error, and the
+  backend was never invoked. Confirmed from Workers logs — the target script
+  recorded zero invocations while the proxy recorded one per update.
+
+### ✨ Added
+
+- **`FORWARD_SERVICE` service binding.** When bound, `/webhook` relays through
+  it instead of `FORWARD_WEBHOOK_URL`, which is the only reliable way to reach
+  another Worker. `FORWARD_WEBHOOK_URL` is unchanged and still correct for an
+  ordinary HTTP backend.
+- **A non-2xx from the forward target is now logged.** Previously only a thrown
+  exception was, so a backend answering 500 was indistinguishable from success.
+
+---
+
 ## [v1.0.0] - 2026-07-26
 
 The release that removes Node.js. **Contains breaking changes** — every user

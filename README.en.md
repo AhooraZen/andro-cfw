@@ -334,6 +334,14 @@ If you have an existing PHP, Python, or Go webhook bot hosted on your own server
 2. Every update Telegram sends to your Worker is forwarded verbatim to your
    backend, so the network filter never touches your server.
 
+> **If your backend is itself a Cloudflare Worker, `FORWARD_WEBHOOK_URL` will
+> not work.** A `fetch()` from one Worker to another Worker's `workers.dev`
+> hostname is not dispatched to that Worker: the call appears to succeed, the
+> update is accepted with `200 OK`, and the backend simply never runs. Add a
+> [service binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/)
+> named `FORWARD_SERVICE` pointing at the target Worker instead — the worker
+> prefers it over `FORWARD_WEBHOOK_URL` when both are present.
+
 The worker always answers Telegram with `200 OK`, even if your backend is
 down — a non-200 makes Telegram redeliver the same update indefinitely, which
 turns a brief outage into a retry storm.
