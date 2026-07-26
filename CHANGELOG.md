@@ -117,6 +117,12 @@ must re-authenticate; see the migration notes at the end of this entry.
 
 ### 🐛 Fixed
 
+- **A bot whose HTTP client sends no `User-Agent` was silently unreachable.**
+  urllib stamps `Python-urllib/3.x` on such requests, and Cloudflare's Browser
+  Integrity Check answers that exact signature with `403 error 1010` before the
+  request reaches the Worker at all. A neutral agent is now substituted when —
+  and only when — the client sent none. Found on the first live end-to-end run;
+  no unit test could have caught it, since it depends on Cloudflare's edge.
 - **Quota exhaustion no longer costs a request.** See above: the old balancer
   could only learn an account was out of quota by being told `429`, so each
   rotation surfaced one failure to the bot.
@@ -268,7 +274,7 @@ migration notes below before upgrading.
 
 ### 🧪 Testing & tooling
 
-- 76 → **220 tests**. The four `patch()` tests previously asserted against
+- 76 → **222 tests**. The four `patch()` tests previously asserted against
   `MagicMock`, which auto-creates any attribute touched — they passed no matter
   what the code did. They now use real modules and real frozen dataclasses.
 - New coverage: end-to-end load-balancer failover over a real socket, concurrent

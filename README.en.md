@@ -67,6 +67,11 @@ python -m andro_cfw.cli setup-path
 
 ---
 
+> **Verified against a live Cloudflare account.** `login`, `init`, `check`,
+> `remove`, the pass-through proxy, the webhook route and the daemon's quota
+> accounting have all been exercised end to end on a real deployed Worker, not
+> only in tests.
+
 ## 🔑 Step 1 — Log in with a Cloudflare API token (`andro-cfw login`)
 
 andro-cfw authenticates with a scoped **API token** that you create once:
