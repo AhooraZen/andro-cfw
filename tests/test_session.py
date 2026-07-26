@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 from unittest.mock import MagicMock, patch
 
@@ -226,6 +227,11 @@ def test_api_base_url_without_a_worker_raises_actionable_error():
         CFWSession().api_base_url()
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows has no POSIX modes; os.chmod only toggles the read-only bit. "
+           "Access is governed by the ACL that %USERPROFILE% already carries.",
+)
 def test_key_file_and_dir_are_owner_only(tmp_path):
     key_dir = tmp_path / "keys"
     with patch("andro_cfw.session.KEY_DIR", key_dir), \

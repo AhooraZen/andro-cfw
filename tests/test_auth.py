@@ -58,6 +58,11 @@ def test_account_label_cannot_escape_the_accounts_directory(tmp_path):
             _account_env(evil)
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows has no POSIX modes; os.chmod only toggles the read-only bit. "
+           "Access is governed by the ACL that %USERPROFILE% already carries.",
+)
 def test_account_dir_is_owner_only(tmp_path, monkeypatch):
     """The directory holds live Cloudflare OAuth tokens."""
     import stat as stat_mod
