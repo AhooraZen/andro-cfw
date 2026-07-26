@@ -4,14 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "andro-cfw"
-version = "0.2.0"
-description = "Run Telegram bots from filtered/restricted regions via your own Cloudflare Worker proxy, with cross-platform auto Node.js setup and smart multi-account load balancing (no VPN required)."
+version = "1.0.0"
+description = "Run Telegram bots from filtered/restricted regions via your own Cloudflare Worker proxy. No Node.js, no VPN: a shared local daemon load-balances across your Cloudflare accounts, counts quota, and ships a live dashboard."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "andro-cfw contributors" }]
 keywords = ["telegram", "telegram-bot", "cloudflare", "cloudflare-workers", "proxy", "iran", "filter-bypass"]
 classifiers = [
+    # PyPI refuses any upload carrying this classifier. Deliberate: this is a
+    # personal tool, distributed as a wheel on the GitHub release instead.
+    "Private :: Do Not Upload",
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -35,4 +38,26 @@ andro-cfw = "andro_cfw.cli:main"
 include = ["andro_cfw*"]
 
 [tool.setuptools.package-data]
-"andro_cfw.templates" = ["*.ts", "*.tmpl"]
+"andro_cfw.templates" = ["*.mjs", "*.html"]
+"andro_cfw" = ["py.typed"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "S", "RUF"]
+ignore = [
+    "E501",    # line length is handled by the formatter, not enforced here
+    "UP006",   # supports Python 3.9; PEP 585 generics stay quoted
+    "UP007",   # ditto for PEP 604 unions
+    "UP045",   # ditto for Optional[X]
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]      # asserts and dummy tokens are the point
+"examples/*" = ["S105"]                   # placeholder tokens users replace
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning"]

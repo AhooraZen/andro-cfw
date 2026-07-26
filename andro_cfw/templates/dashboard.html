@@ -1,0 +1,1468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="robots" content="noindex, nofollow">
+<title>andro-cfw &middot; daemon</title>
+<style>
+  :root {
+    --bg: #0a0c0f;
+    --panel: #101317;
+    --panel-2: #14181d;
+    --border: #1d232b;
+    --border-strong: #2b333d;
+    --text: #e7ebf1;
+    --text-2: #9aa4b2;
+    --text-3: #6b7482;
+    --accent: #5b9dff;
+    --accent-soft: rgba(91, 157, 255, 0.14);
+    --green: #3ecf8e;
+    --green-soft: rgba(62, 207, 142, 0.14);
+    --amber: #f2b544;
+    --amber-soft: rgba(242, 181, 68, 0.14);
+    --red: #f2635f;
+    --red-soft: rgba(242, 99, 95, 0.14);
+    --violet: #a78bfa;
+    --track: #1b2027;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif;
+    --radius: 10px;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #fbfbfc;
+      --panel: #ffffff;
+      --panel-2: #f7f8fa;
+      --border: #e5e8ec;
+      --border-strong: #d3d8de;
+      --text: #10141a;
+      --text-2: #5b6472;
+      --text-3: #838c99;
+      --accent: #0d6bdd;
+      --accent-soft: rgba(13, 107, 221, 0.10);
+      --green: #0f9d63;
+      --green-soft: rgba(15, 157, 99, 0.12);
+      --amber: #b3760a;
+      --amber-soft: rgba(179, 118, 10, 0.13);
+      --red: #d23c3c;
+      --red-soft: rgba(210, 60, 60, 0.11);
+      --violet: #7c5cf0;
+      --track: #eceef1;
+      --shadow: 0 1px 2px rgba(16, 20, 26, 0.06);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  .mono { font-family: var(--mono); }
+
+  .shell {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px 24px 72px;
+  }
+
+  /* ---------------------------------------------------------------- banner */
+
+  #banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: var(--red-soft);
+    border-bottom: 1px solid var(--border);
+    color: var(--red);
+    font-size: 13px;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    backdrop-filter: blur(6px);
+  }
+
+  body.offline #banner { display: flex; }
+
+  #banner .spacer { flex: 1; }
+
+  #banner .retry-note { color: var(--text-3); }
+
+  body.offline .shell { opacity: 0.62; }
+
+  /* ---------------------------------------------------------------- header */
+
+  header.top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px 24px;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .brand h1 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-family: var(--mono);
+  }
+
+  .brand p {
+    margin: 3px 0 0;
+    color: var(--text-3);
+    font-size: 12.5px;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--text-2);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .chip b {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-3);
+    flex: none;
+  }
+
+  .dot.live {
+    background: var(--green);
+    box-shadow: 0 0 0 3px var(--green-soft);
+  }
+
+  .dot.stale { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+  .dot.down  { background: var(--red);   box-shadow: 0 0 0 3px var(--red-soft); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .dot.live { animation: breathe 2.6s ease-in-out infinite; }
+  }
+
+  @keyframes breathe {
+    0%, 100% { box-shadow: 0 0 0 3px var(--green-soft); }
+    50%      { box-shadow: 0 0 0 5px var(--green-soft); }
+  }
+
+  /* --------------------------------------------------------------- summary */
+
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1px;
+    margin: 26px 0 34px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .stat {
+    background: var(--panel);
+    padding: 16px 18px 18px;
+    min-width: 0;
+  }
+
+  .stat .label {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+  }
+
+  .stat .value {
+    margin-top: 7px;
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .stat .sub {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-3);
+    overflow-wrap: anywhere;
+  }
+
+  .stat .value.accent { color: var(--accent); }
+
+  /* --------------------------------------------------------------- section */
+
+  section { margin-bottom: 34px; }
+
+  .section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .section-head h2 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-2);
+  }
+
+  .section-head .note {
+    font-size: 12px;
+    color: var(--text-3);
+    text-align: right;
+  }
+
+  .empty {
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+    padding: 30px 20px;
+    text-align: center;
+    color: var(--text-3);
+    font-size: 13px;
+    background: var(--panel);
+  }
+
+  .empty strong {
+    display: block;
+    color: var(--text-2);
+    font-weight: 500;
+    font-size: 13.5px;
+    margin-bottom: 5px;
+  }
+
+  /* --------------------------------------------------------------- workers */
+
+  .workers {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 14px;
+  }
+
+  .worker {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px 17px;
+    box-shadow: var(--shadow);
+    min-width: 0;
+  }
+
+  .worker.is-active {
+    border-color: var(--accent);
+    box-shadow: var(--shadow), 0 0 0 1px var(--accent-soft);
+  }
+
+  .worker-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .worker .account {
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    overflow-wrap: anywhere;
+  }
+
+  .worker .wname {
+    margin-top: 2px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-3);
+    overflow-wrap: anywhere;
+  }
+
+  .worker .wurl {
+    display: inline-block;
+    margin-top: 8px;
+    max-width: 100%;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-2);
+    text-decoration: none;
+    border-bottom: 1px solid var(--border-strong);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+
+  .worker .wurl:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    flex: none;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+
+  .badge .dot { width: 6px; height: 6px; box-shadow: none; animation: none; }
+
+  .badge.available { background: var(--green-soft); color: var(--green); }
+  .badge.available .dot { background: var(--green); }
+  .badge.quota { background: var(--amber-soft); color: var(--amber); }
+  .badge.quota .dot { background: var(--amber); }
+  .badge.cooldown { background: var(--red-soft); color: var(--red); }
+  .badge.cooldown .dot { background: var(--red); }
+  .badge.unknown { background: var(--panel-2); color: var(--text-3); border-color: var(--border); }
+  .badge.unknown .dot { background: var(--text-3); }
+
+  .badge.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+  }
+
+  .bar-row {
+    margin-top: 14px;
+  }
+
+  .bar {
+    position: relative;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--track);
+    overflow: hidden;
+  }
+
+  .bar .fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: 3px;
+    background: var(--green);
+  }
+
+  .bar .fill.warn { background: var(--amber); }
+  .bar .fill.over { background: var(--red); }
+
+  .bar .mark {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 1px;
+    background: var(--border-strong);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .bar .mark { background: #4b5563; }
+  }
+
+  .bar-legend {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-3);
+  }
+
+  .bar-legend .left { color: var(--text-2); }
+  .bar-legend .left b { color: var(--text); font-weight: 600; }
+
+  .worker-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px 12px;
+    margin-top: 12px;
+    padding-top: 11px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-3);
+  }
+
+  .worker-foot .lat b {
+    color: var(--text);
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .worker-foot .reset { color: var(--amber); }
+
+  .worker .err {
+    margin-top: 9px;
+    padding: 7px 9px;
+    border-radius: 6px;
+    background: var(--red-soft);
+    color: var(--red);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
+  }
+
+  /* ----------------------------------------------------------------- chart */
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+
+  .chart-wrap { padding: 14px 14px 6px; }
+
+  #chart {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  #chart .grid { stroke: var(--border); stroke-width: 1; }
+  #chart .axis-text { fill: var(--text-3); font-size: 11px; font-family: var(--mono); }
+  #chart .line { fill: none; stroke-width: 1.75; stroke-linejoin: round; stroke-linecap: round; }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    padding: 10px 16px 14px;
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+  }
+
+  .legend .item {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text-2);
+    font-family: var(--mono);
+    min-width: 0;
+  }
+
+  .legend .swatch {
+    width: 9px;
+    height: 3px;
+    border-radius: 2px;
+    flex: none;
+  }
+
+  /* ---------------------------------------------------------------- events */
+
+  .log {
+    max-height: 340px;
+    overflow: auto;
+    border-radius: var(--radius);
+  }
+
+  table.events {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+
+  table.events th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--panel-2);
+    color: var(--text-3);
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  table.events td {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    color: var(--text-2);
+  }
+
+  table.events tr:last-child td { border-bottom: none; }
+
+  td.t { white-space: nowrap; color: var(--text-3); width: 1%; }
+  td.k { width: 1%; }
+  td.w { font-family: var(--mono); font-size: 11.5px; overflow-wrap: anywhere; }
+  td.d { color: var(--text); overflow-wrap: anywhere; }
+  .w-inline { display: none; }
+
+  .kind {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .kind.failover     { background: var(--amber-soft); color: var(--amber); }
+  .kind.quota        { background: var(--amber-soft); color: var(--amber); }
+  .kind.retry        { background: var(--accent-soft); color: var(--accent); }
+  .kind.daemon_start { background: var(--green-soft); color: var(--green); }
+  .kind.error        { background: var(--red-soft); color: var(--red); }
+  .kind.other        { background: var(--panel-2); color: var(--text-3); }
+
+  footer.foot {
+    margin-top: 30px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px 16px;
+    font-size: 11.5px;
+    color: var(--text-3);
+  }
+
+  /* ------------------------------------------------------------ responsive */
+
+  @media (max-width: 900px) {
+    .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+
+  @media (max-width: 560px) {
+    .shell { padding: 20px 14px 56px; }
+    .workers { grid-template-columns: minmax(0, 1fr); }
+    .stat .value { font-size: 22px; }
+    header.top { align-items: flex-start; }
+    table.events th, table.events td { padding: 7px 10px; }
+
+    /* The worker column cannot hold a worker name at this width; fold it into
+       the detail cell instead of hyphen-stacking it one character at a time. */
+    td.w, th.w-h { display: none; }
+    .w-inline {
+      display: block;
+      margin-bottom: 3px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-3);
+      overflow-wrap: anywhere;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .summary { grid-template-columns: minmax(0, 1fr); }
+    .worker-head { flex-direction: column; }
+    .badges { justify-content: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<div id="banner" role="status">
+  <span class="dot down"></span>
+  <span><strong>Daemon unreachable.</strong> <span id="banner-note">Showing the last known state.</span></span>
+  <span class="spacer"></span>
+  <span class="retry-note" id="retry-note">retrying every 3s</span>
+</div>
+
+<div class="shell">
+
+  <header class="top">
+    <div class="brand">
+      <h1>andro-cfw</h1>
+      <p>Cloudflare Worker gateway for the Telegram Bot API</p>
+    </div>
+    <div class="meta">
+      <span class="chip"><span class="dot" id="live-dot"></span><span id="live-text">connecting</span></span>
+      <span class="chip">port <b class="num" id="m-port">&mdash;</b></span>
+      <span class="chip">uptime <b class="num" id="m-uptime">&mdash;</b></span>
+      <span class="chip">v<b class="num" id="m-version">&mdash;</b></span>
+    </div>
+  </header>
+
+  <div class="summary">
+    <div class="stat">
+      <div class="label">Requests today</div>
+      <div class="value num" id="s-requests">0</div>
+      <div class="sub" id="s-requests-sub">UTC day &mdash;</div>
+    </div>
+    <div class="stat">
+      <div class="label">Workers</div>
+      <div class="value num" id="s-workers">0</div>
+      <div class="sub" id="s-workers-sub">no accounts registered</div>
+    </div>
+    <div class="stat">
+      <div class="label">Available</div>
+      <div class="value num" id="s-available">0</div>
+      <div class="sub" id="s-available-sub">&mdash;</div>
+    </div>
+    <div class="stat">
+      <div class="label">Combined quota</div>
+      <div class="value num accent" id="s-quota">0.00%</div>
+      <div class="sub" id="s-quota-sub">&mdash;</div>
+    </div>
+  </div>
+
+  <section id="workers-section">
+    <div class="section-head">
+      <h2>Workers</h2>
+      <div class="note" id="workers-note"></div>
+    </div>
+    <div class="workers" id="workers"></div>
+  </section>
+
+  <section id="chart-section">
+    <div class="section-head">
+      <h2>Latency</h2>
+      <div class="note" id="chart-note">median response time per worker</div>
+    </div>
+    <div class="panel">
+      <div class="chart-wrap">
+        <svg id="chart" viewBox="0 0 760 240" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Worker latency over time"></svg>
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div id="chart-empty"></div>
+  </section>
+
+  <section id="events-section">
+    <div class="section-head">
+      <h2>Events</h2>
+      <div class="note" id="events-note"></div>
+    </div>
+    <div class="panel log" id="log"></div>
+  </section>
+
+  <footer class="foot">
+    <span>Counts cover traffic proxied by the daemon. Webhook deliveries go straight to the Worker and are not counted here.</span>
+    <span id="foot-updated">never updated</span>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ------------------------------------------------------------------ setup
+
+  var POLL_MS = 3000;
+  var STALE_MS = 9000;
+
+  // The page lives at /__andro/ ; keep every request relative to that prefix so
+  // the dashboard keeps working if the daemon is ever mounted somewhere else.
+  var BASE = (function () {
+    var p = window.location.pathname || "/";
+    return p.charAt(p.length - 1) === "/" ? p : p + "/";
+  })();
+  var STATE_URL = BASE + "api/state";
+
+  var SVG_NS = document.getElementById("chart").namespaceURI;
+
+  var SERIES_COLORS = [
+    "#5b9dff", "#3ecf8e", "#f2b544", "#a78bfa",
+    "#f472b6", "#22d3ee", "#fb923c", "#94a3b8"
+  ];
+
+  var STATES = { available: 1, quota: 1, cooldown: 1 };
+  var KINDS = { failover: 1, quota: 1, retry: 1, daemon_start: 1, error: 1 };
+
+  var nf = new Intl.NumberFormat("en-US");
+
+  var latest = null;        // last successfully fetched payload
+  var lastOkAt = 0;         // performance clock of the last good fetch
+  var failures = 0;         // consecutive fetch failures
+  var warned = false;       // console noise guard
+  var sigs = {};            // per-section render signatures
+  var tickers = [];         // nodes whose text is time-relative
+  var chartWidth = 0;       // pixel width the chart was last drawn for
+
+  // -------------------------------------------------------------- utilities
+
+  function $(id) { return document.getElementById(id); }
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) { node.className = cls; }
+    if (text !== undefined && text !== null) { node.textContent = String(text); }
+    return node;
+  }
+
+  function clear(node) {
+    while (node.firstChild) { node.removeChild(node.firstChild); }
+  }
+
+  function setText(id, value) {
+    var node = $(id);
+    if (node) { node.textContent = value; }
+  }
+
+  function num(value, fallback) {
+    var n = typeof value === "number" ? value : parseFloat(value);
+    return (typeof n === "number" && isFinite(n)) ? n : (fallback === undefined ? 0 : fallback);
+  }
+
+  function str(value, fallback) {
+    if (value === undefined || value === null) { return fallback === undefined ? "" : fallback; }
+    var s = String(value);
+    return s.length ? s : (fallback === undefined ? "" : fallback);
+  }
+
+  function clamp(value, lo, hi) {
+    return value < lo ? lo : (value > hi ? hi : value);
+  }
+
+  function fmtInt(value) {
+    return nf.format(Math.round(num(value, 0)));
+  }
+
+  function fmtPercent(fraction, digits) {
+    var n = num(fraction, 0) * 100;
+    if (!isFinite(n)) { n = 0; }
+    return n.toFixed(digits === undefined ? 1 : digits) + "%";
+  }
+
+  function fmtMs(value) {
+    if (value === null || value === undefined || !isFinite(num(value, NaN))) { return null; }
+    var n = num(value, 0);
+    if (n >= 1000) { return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + " s"; }
+    return (n >= 100 ? Math.round(n) : Math.round(n * 10) / 10) + " ms";
+  }
+
+  // "2h 14m" - two units is enough for a status line.
+  function fmtDuration(seconds) {
+    var s = Math.max(0, Math.floor(num(seconds, 0)));
+    var d = Math.floor(s / 86400);
+    var h = Math.floor((s % 86400) / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    var sec = s % 60;
+    if (d > 0) { return d + "d " + h + "h"; }
+    if (h > 0) { return h + "h " + m + "m"; }
+    if (m > 0) { return m + "m " + sec + "s"; }
+    return sec + "s";
+  }
+
+  function fmtAgo(unixSeconds) {
+    var at = num(unixSeconds, 0);
+    if (!at) { return "—"; }
+    var delta = (Date.now() / 1000) - at;
+    if (delta < 0) { return "just now"; }
+    if (delta < 10) { return "just now"; }
+    if (delta < 60) { return Math.floor(delta) + "s ago"; }
+    if (delta < 3600) { return Math.floor(delta / 60) + "m ago"; }
+    if (delta < 86400) { return Math.floor(delta / 3600) + "h ago"; }
+    return Math.floor(delta / 86400) + "d ago";
+  }
+
+  function fmtAbsolute(unixSeconds) {
+    var at = num(unixSeconds, 0);
+    if (!at) { return ""; }
+    try {
+      return new Date(at * 1000).toLocaleString();
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function isHttpUrl(value) {
+    return typeof value === "string" && /^https?:\/\//i.test(value);
+  }
+
+  function shortUrl(value) {
+    return String(value).replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  }
+
+  function signature(value) {
+    try { return JSON.stringify(value); } catch (e) { return String(Math.random()); }
+  }
+
+  // A node whose text depends on the wall clock, refreshed once a second.
+  function ticker(node, fn) {
+    tickers.push({ node: node, fn: fn });
+    node.textContent = fn();
+    return node;
+  }
+
+  // ------------------------------------------------------------- normalising
+
+  function normalise(raw) {
+    var data = (raw && typeof raw === "object") ? raw : {};
+    var daemon = (data.daemon && typeof data.daemon === "object") ? data.daemon : {};
+    var quota = (data.quota && typeof data.quota === "object") ? data.quota : {};
+    var totals = (data.totals && typeof data.totals === "object") ? data.totals : {};
+    var meta = (data.series_meta && typeof data.series_meta === "object") ? data.series_meta : {};
+    var workers = Array.isArray(data.workers) ? data.workers : [];
+    var events = Array.isArray(data.events) ? data.events : [];
+    var series = (data.latency_series && typeof data.latency_series === "object") ? data.latency_series : {};
+
+    var dailyLimit = num(quota.daily_limit, 100000);
+    if (dailyLimit <= 0) { dailyLimit = 100000; }
+
+    var cleanWorkers = workers.filter(function (w) {
+      return w && typeof w === "object";
+    }).map(function (w, i) {
+      var requests = Math.max(0, num(w.requests_today, 0));
+      var fraction = (typeof w.quota_fraction === "number" && isFinite(w.quota_fraction))
+        ? w.quota_fraction
+        : requests / dailyLimit;
+      var state = str(w.state, "");
+      return {
+        index: num(w.index, i),
+        worker_name: str(w.worker_name, "unnamed worker"),
+        worker_url: str(w.worker_url, ""),
+        account_label: str(w.account_label, "account " + (i + 1)),
+        active: w.active === true,
+        state: Object.prototype.hasOwnProperty.call(STATES, state) ? state : "unknown",
+        requests_today: requests,
+        quota_fraction: Math.max(0, num(fraction, 0)),
+        latency_ms: (typeof w.latency_ms === "number" && isFinite(w.latency_ms)) ? w.latency_ms : null,
+        exhausted_until: Math.max(0, num(w.exhausted_until, 0)),
+        last_error: str(w.last_error, "")
+      };
+    });
+
+    var available = cleanWorkers.filter(function (w) { return w.state === "available"; }).length;
+
+    return {
+      daemon: {
+        port: num(daemon.port, 0),
+        uptime_seconds: Math.max(0, num(daemon.uptime_seconds, 0)),
+        version: str(daemon.version, "—"),
+        started_at: num(daemon.started_at, 0)
+      },
+      quota: {
+        daily_limit: dailyLimit,
+        headroom: clamp(num(quota.headroom, 0.95), 0, 1),
+        utc_day: str(quota.utc_day, "—")
+      },
+      workers: cleanWorkers,
+      latency_series: series,
+      series_meta: {
+        buckets: Math.max(1, Math.floor(num(meta.buckets, 60))),
+        window_seconds: Math.max(1, num(meta.window_seconds, 3600))
+      },
+      events: events.filter(function (e) { return e && typeof e === "object"; }).map(function (e) {
+        var kind = str(e.kind, "");
+        return {
+          at: num(e.at, 0),
+          worker_name: str(e.worker_name, ""),
+          kind: Object.prototype.hasOwnProperty.call(KINDS, kind) ? kind : "other",
+          raw_kind: kind || "event",
+          detail: str(e.detail, "")
+        };
+      }),
+      totals: {
+        requests_today: Math.max(0, num(totals.requests_today, cleanWorkers.reduce(function (sum, w) {
+          return sum + w.requests_today;
+        }, 0))),
+        workers: Math.max(0, num(totals.workers, cleanWorkers.length)),
+        available: Math.max(0, num(totals.available, available))
+      }
+    };
+  }
+
+  // ------------------------------------------------------------------ header
+
+  function renderHeader(d) {
+    setText("m-port", d.daemon.port ? String(d.daemon.port) : "—");
+    setText("m-version", d.daemon.version);
+  }
+
+  function renderUptime() {
+    if (!latest) { return; }
+    var base = latest.daemon.uptime_seconds;
+    var drift = lastOkAt ? (performance.now() - lastOkAt) / 1000 : 0;
+    setText("m-uptime", fmtDuration(base + drift));
+  }
+
+  function renderLiveness() {
+    var dot = $("live-dot");
+    var text = $("live-text");
+    var age = lastOkAt ? performance.now() - lastOkAt : Infinity;
+    var cls = "dot";
+    var label = "connecting";
+
+    if (failures > 0) {
+      cls = "dot down";
+      label = latest ? "offline" : "unreachable";
+    } else if (age !== Infinity) {
+      cls = age > STALE_MS ? "dot stale" : "dot live";
+      label = age > STALE_MS ? "stale" : "live";
+    }
+
+    dot.className = cls;
+    text.textContent = label;
+    document.body.classList.toggle("offline", failures > 0);
+
+    var bannerNote = $("banner-note");
+    if (bannerNote) {
+      bannerNote.textContent = latest
+        ? "Showing the last known state."
+        : "Waiting for the first response.";
+    }
+
+    var note = $("retry-note");
+    if (note) {
+      note.textContent = failures <= 1
+        ? "retrying every 3s"
+        : "retrying every 3s · " + failures + " failed attempts";
+    }
+  }
+
+  // ----------------------------------------------------------------- summary
+
+  function renderSummary(d) {
+    var workerCount = d.workers.length || d.totals.workers;
+    var poolLimit = workerCount * d.quota.daily_limit;
+    var combined = poolLimit > 0 ? d.totals.requests_today / poolLimit : 0;
+
+    setText("s-requests", fmtInt(d.totals.requests_today));
+    setText("s-requests-sub", "UTC day " + d.quota.utc_day);
+
+    setText("s-workers", fmtInt(workerCount));
+    setText("s-workers-sub", workerCount
+      ? fmtInt(d.quota.daily_limit) + " requests/day each"
+      : "no accounts registered");
+
+    setText("s-available", fmtInt(d.totals.available));
+    var blocked = Math.max(0, workerCount - d.totals.available);
+    setText("s-available-sub", workerCount
+      ? (blocked ? fmtInt(blocked) + " out of rotation" : "all workers ready")
+      : "—");
+
+    setText("s-quota", fmtPercent(combined, 2));
+    setText("s-quota-sub", poolLimit > 0
+      ? fmtInt(d.totals.requests_today) + " of " + fmtInt(poolLimit) + " pooled"
+      : "no pooled quota yet");
+  }
+
+  // ----------------------------------------------------------------- workers
+
+  function stateLabel(state) {
+    if (state === "available") { return "available"; }
+    if (state === "quota") { return "out of quota"; }
+    if (state === "cooldown") { return "cooling down"; }
+    return "unknown";
+  }
+
+  function workerCard(w, d) {
+    var card = el("div", "worker" + (w.active ? " is-active" : ""));
+
+    var head = el("div", "worker-head");
+    var ident = el("div", "ident");
+    ident.style.minWidth = "0";
+    ident.appendChild(el("div", "account", w.account_label));
+    ident.appendChild(el("div", "wname", w.worker_name));
+    head.appendChild(ident);
+
+    var badges = el("div", "badges");
+    if (w.active) {
+      badges.appendChild(el("span", "badge active", "active"));
+    }
+    var badge = el("span", "badge " + w.state);
+    badge.appendChild(el("span", "dot"));
+    badge.appendChild(el("span", null, stateLabel(w.state)));
+    badges.appendChild(badge);
+    head.appendChild(badges);
+    card.appendChild(head);
+
+    if (isHttpUrl(w.worker_url)) {
+      var link = el("a", "wurl", shortUrl(w.worker_url));
+      link.href = w.worker_url;
+      link.target = "_blank";
+      link.rel = "noreferrer noopener";
+      link.title = w.worker_url;
+      card.appendChild(link);
+    } else if (w.worker_url) {
+      card.appendChild(el("div", "wurl", w.worker_url));
+    }
+
+    // Quota bar -------------------------------------------------------------
+    var fraction = w.quota_fraction;
+    var row = el("div", "bar-row");
+    var bar = el("div", "bar");
+    var fill = el("div", "fill" + (fraction >= 1 ? " over" : (fraction >= d.quota.headroom ? " warn" : "")));
+    fill.style.width = (clamp(fraction, 0, 1) * 100).toFixed(2) + "%";
+    bar.appendChild(fill);
+
+    var mark = el("div", "mark");
+    mark.style.left = (clamp(d.quota.headroom, 0, 1) * 100).toFixed(2) + "%";
+    mark.title = "failover threshold · " + fmtPercent(d.quota.headroom, 0);
+    bar.appendChild(mark);
+    row.appendChild(bar);
+
+    var legend = el("div", "bar-legend");
+    var left = el("div", "left");
+    left.appendChild(el("b", null, fmtInt(w.requests_today)));
+    left.appendChild(el("span", null, " / " + fmtInt(d.quota.daily_limit)));
+    legend.appendChild(left);
+    legend.appendChild(el("div", "right num", fmtPercent(fraction, 2) + " used"));
+    row.appendChild(legend);
+    card.appendChild(row);
+
+    // Footer ----------------------------------------------------------------
+    var foot = el("div", "worker-foot");
+    var lat = el("div", "lat");
+    lat.appendChild(el("span", null, "median "));
+    var latValue = fmtMs(w.latency_ms);
+    lat.appendChild(el("b", "num", latValue === null ? "—" : latValue));
+    foot.appendChild(lat);
+
+    if (w.state === "quota" || w.exhausted_until > 0) {
+      var resetNode = el("div", "reset num");
+      var until = w.exhausted_until;
+      if (until > 0) {
+        resetNode.title = "resets at " + fmtAbsolute(until);
+        ticker(resetNode, function () {
+          var remaining = until - (Date.now() / 1000);
+          return remaining > 0 ? "resets in " + fmtDuration(remaining) : "reset due";
+        });
+      } else {
+        resetNode.textContent = "waiting for UTC reset";
+      }
+      foot.appendChild(resetNode);
+    } else if (w.state === "cooldown") {
+      foot.appendChild(el("div", "reset", "will retry shortly"));
+    }
+    card.appendChild(foot);
+
+    if (w.last_error) {
+      card.appendChild(el("div", "err", w.last_error));
+    }
+
+    return card;
+  }
+
+  function renderWorkers(d) {
+    var host = $("workers");
+    clear(host);
+
+    var note = $("workers-note");
+    if (d.workers.length) {
+      note.textContent = fmtInt(d.totals.available) + " of " + fmtInt(d.workers.length) + " available"
+        + " · failover at " + fmtPercent(d.quota.headroom, 0) + " of daily quota";
+    } else {
+      note.textContent = "";
+    }
+
+    if (!d.workers.length) {
+      var empty = el("div", "empty");
+      empty.appendChild(el("strong", null, "No workers registered"));
+      empty.appendChild(el("div", null,
+        "Add a Cloudflare account and deploy a worker, then this panel fills in."));
+      host.appendChild(empty);
+      host.style.display = "block";
+      return;
+    }
+
+    host.style.display = "";
+    d.workers.slice().sort(function (a, b) { return a.index - b.index; }).forEach(function (w) {
+      host.appendChild(workerCard(w, d));
+    });
+  }
+
+  // ------------------------------------------------------------------- chart
+
+  function svg(tag, attrs) {
+    var node = document.createElementNS(SVG_NS, tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (key) {
+        node.setAttribute(key, String(attrs[key]));
+      });
+    }
+    return node;
+  }
+
+  function niceCeiling(value) {
+    if (!(value > 0)) { return 100; }
+    var magnitude = Math.pow(10, Math.floor(Math.log(value) / Math.LN10));
+    var steps = [1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10];
+    for (var i = 0; i < steps.length; i++) {
+      var candidate = steps[i] * magnitude;
+      if (value <= candidate) { return candidate; }
+    }
+    return 10 * magnitude;
+  }
+
+  function collectSeries(d) {
+    var out = [];
+    var known = {};
+    d.workers.forEach(function (w) { known[w.worker_name] = true; });
+
+    var names = Object.keys(d.latency_series || {});
+    // Workers first, in configuration order, so colours stay stable.
+    var ordered = d.workers.map(function (w) { return w.worker_name; }).filter(function (n) {
+      return names.indexOf(n) !== -1;
+    });
+    names.forEach(function (n) {
+      if (ordered.indexOf(n) === -1) { ordered.push(n); }
+    });
+
+    ordered.forEach(function (name) {
+      var raw = d.latency_series[name];
+      if (!Array.isArray(raw)) { return; }
+      var points = raw.filter(function (p) {
+        return p && typeof p === "object" && isFinite(num(p.latency_ms, NaN));
+      }).map(function (p) {
+        return { bucket: Math.max(0, Math.floor(num(p.bucket, 0))), latency_ms: num(p.latency_ms, 0) };
+      }).sort(function (a, b) { return a.bucket - b.bucket; });
+      if (points.length) {
+        out.push({ name: name, points: points, known: known[name] === true });
+      }
+    });
+    return out;
+  }
+
+  function renderChart(d) {
+    var chart = $("chart");
+    var legendHost = $("legend");
+    var emptyHost = $("chart-empty");
+    clear(chart);
+    clear(legendHost);
+    clear(emptyHost);
+
+    var series = collectSeries(d);
+    var minutes = Math.round(d.series_meta.window_seconds / 60);
+    $("chart-note").textContent = series.length
+      ? "median response time · last " + (minutes >= 1 ? minutes + " min" : "hour")
+      : "median response time per worker";
+
+    if (!series.length) {
+      chart.parentNode.parentNode.style.display = "none";
+      var empty = el("div", "empty");
+      empty.appendChild(el("strong", null, "No latency samples yet"));
+      empty.appendChild(el("div", null,
+        "The chart appears once the daemon has proxied its first requests."));
+      emptyHost.appendChild(empty);
+      return;
+    }
+    chart.parentNode.parentNode.style.display = "";
+
+    // The viewBox tracks the element's real pixel size, so labels and strokes
+    // render at their nominal size on a phone and on a 1440p monitor alike.
+    var W = Math.round(chart.clientWidth) || 760;
+    chartWidth = W;
+    var H = Math.round(clamp(W * 0.30, 170, 280));
+    chart.setAttribute("viewBox", "0 0 " + W + " " + H);
+
+    var padL = 54, padR = 12, padT = 14, padB = 26;
+    if (W < 420) { padL = 46; }
+    var plotW = W - padL - padR;
+    var plotH = H - padT - padB;
+
+    var buckets = d.series_meta.buckets;
+    var maxBucket = buckets - 1;
+    series.forEach(function (s) {
+      s.points.forEach(function (p) { if (p.bucket > maxBucket) { maxBucket = p.bucket; } });
+    });
+    if (maxBucket < 1) { maxBucket = 1; }
+
+    var peak = 0;
+    series.forEach(function (s) {
+      s.points.forEach(function (p) { if (p.latency_ms > peak) { peak = p.latency_ms; } });
+    });
+    var yMax = niceCeiling(peak * 1.15);
+
+    function x(bucket) { return padL + (clamp(bucket, 0, maxBucket) / maxBucket) * plotW; }
+    function y(ms) { return padT + plotH - (clamp(ms, 0, yMax) / yMax) * plotH; }
+
+    // Gridlines and y-axis labels ------------------------------------------
+    var ticks = H < 200 ? 3 : 4;
+    for (var i = 0; i <= ticks; i++) {
+      var value = (yMax / ticks) * i;
+      var yy = y(value);
+      chart.appendChild(svg("line", {
+        "class": "grid", x1: padL, y1: yy, x2: W - padR, y2: yy
+      }));
+      var label = svg("text", {
+        "class": "axis-text", x: padL - 8, y: yy + 3, "text-anchor": "end"
+      });
+      label.textContent = (yMax >= 40 ? Math.round(value) : Math.round(value * 10) / 10) + " ms";
+      chart.appendChild(label);
+    }
+
+    // X-axis captions -------------------------------------------------------
+    var leftCap = svg("text", {
+      "class": "axis-text", x: padL, y: H - 8, "text-anchor": "start"
+    });
+    leftCap.textContent = "-" + (minutes >= 1 ? minutes + "m" : d.series_meta.window_seconds + "s");
+    chart.appendChild(leftCap);
+
+    var rightCap = svg("text", {
+      "class": "axis-text", x: W - padR, y: H - 8, "text-anchor": "end"
+    });
+    rightCap.textContent = "now";
+    chart.appendChild(rightCap);
+
+    // Series ----------------------------------------------------------------
+    series.forEach(function (s, idx) {
+      var color = SERIES_COLORS[idx % SERIES_COLORS.length];
+      s.color = color;
+
+      if (s.points.length === 1) {
+        chart.appendChild(svg("circle", {
+          cx: x(s.points[0].bucket), cy: y(s.points[0].latency_ms), r: 3, fill: color
+        }));
+      } else {
+        var dAttr = s.points.map(function (p, i) {
+          return (i === 0 ? "M" : "L") + x(p.bucket).toFixed(2) + " " + y(p.latency_ms).toFixed(2);
+        }).join(" ");
+        chart.appendChild(svg("path", { "class": "line", d: dAttr, stroke: color }));
+        var last = s.points[s.points.length - 1];
+        chart.appendChild(svg("circle", {
+          cx: x(last.bucket), cy: y(last.latency_ms), r: 2.5, fill: color
+        }));
+      }
+
+      var item = el("div", "item");
+      var swatch = el("span", "swatch");
+      swatch.style.background = color;
+      item.appendChild(swatch);
+      item.appendChild(el("span", null, s.name));
+      var tail = s.points[s.points.length - 1];
+      var tailText = fmtMs(tail.latency_ms);
+      if (tailText) {
+        var v = el("span", "num");
+        v.style.color = "var(--text-3)";
+        v.textContent = tailText;
+        item.appendChild(v);
+      }
+      legendHost.appendChild(item);
+    });
+  }
+
+  // ------------------------------------------------------------------ events
+
+  function renderEvents(d) {
+    var host = $("log");
+    var scroll = host.scrollTop;
+    clear(host);
+
+    $("events-note").textContent = d.events.length
+      ? fmtInt(d.events.length) + " recent"
+      : "";
+
+    if (!d.events.length) {
+      var empty = el("div", "empty");
+      empty.style.border = "none";
+      empty.style.background = "transparent";
+      empty.appendChild(el("strong", null, "No events yet"));
+      empty.appendChild(el("div", null, "Failovers, quota trips and retries land here."));
+      host.appendChild(empty);
+      return;
+    }
+
+    var table = el("table", "events");
+    var thead = el("thead");
+    var hrow = el("tr");
+    ["When", "Kind", "Worker", "Detail"].forEach(function (title, i) {
+      hrow.appendChild(el("th", i === 2 ? "w-h" : null, title));
+    });
+    thead.appendChild(hrow);
+    table.appendChild(thead);
+
+    var tbody = el("tbody");
+    d.events.slice().sort(function (a, b) { return b.at - a.at; }).forEach(function (ev) {
+      var tr = el("tr");
+
+      var tTd = el("td", "t num");
+      tTd.title = fmtAbsolute(ev.at);
+      ticker(tTd, function () { return fmtAgo(ev.at); });
+      tr.appendChild(tTd);
+
+      var kTd = el("td", "k");
+      kTd.appendChild(el("span", "kind " + ev.kind, ev.raw_kind.replace(/_/g, " ")));
+      tr.appendChild(kTd);
+
+      tr.appendChild(el("td", "w", ev.worker_name || "—"));
+
+      var dTd = el("td", "d");
+      dTd.appendChild(el("span", "w-inline", ev.worker_name || "—"));
+      dTd.appendChild(document.createTextNode(ev.detail || "—"));
+      tr.appendChild(dTd);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    host.appendChild(table);
+    host.scrollTop = scroll;
+  }
+
+  // ------------------------------------------------------------------ render
+
+  function renderIfChanged(key, payload, fn) {
+    var sig = signature(payload);
+    if (sigs[key] === sig) { return false; }
+    sigs[key] = sig;
+    fn();
+    return true;
+  }
+
+  function render(d) {
+    // Sections re-render only when their slice of the payload changed, so text
+    // selection and the event log's scroll position survive a quiet poll.
+    var keep = tickers;
+    tickers = [];
+
+    renderIfChanged("header", d.daemon.port + "|" + d.daemon.version, function () {
+      renderHeader(d);
+    });
+    renderIfChanged("summary", [d.totals, d.quota, d.workers.length], function () {
+      renderSummary(d);
+    });
+    renderIfChanged("workers", [d.workers, d.quota], function () {
+      renderWorkers(d);
+    });
+    renderIfChanged("chart", [d.latency_series, d.series_meta, d.workers.map(function (w) {
+      return w.worker_name;
+    })], function () {
+      renderChart(d);
+    });
+    renderIfChanged("events", d.events, function () {
+      renderEvents(d);
+    });
+
+    // Nodes belonging to sections that did not re-render are still on the page;
+    // the ones that were replaced are detached and quietly dropped here.
+    keep.forEach(function (t) {
+      if (t.node.isConnected) { tickers.push(t); }
+    });
+
+    renderUptime();
+    refreshTickers();
+  }
+
+  function refreshTickers() {
+    var alive = [];
+    for (var i = 0; i < tickers.length; i++) {
+      var t = tickers[i];
+      if (!t.node.isConnected) { continue; }
+      try {
+        t.node.textContent = t.fn();
+      } catch (e) { /* a ticker must never break the page */ }
+      alive.push(t);
+    }
+    tickers = alive;
+  }
+
+  // -------------------------------------------------------------------- poll
+
+  function poll() {
+    fetch(STATE_URL, {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Accept": "application/json" }
+    }).then(function (response) {
+      if (!response.ok) { throw new Error("HTTP " + response.status); }
+      return response.json();
+    }).then(function (payload) {
+      failures = 0;
+      warned = false;
+      lastOkAt = performance.now();
+      latest = normalise(payload);
+      render(latest);
+      $("foot-updated").textContent = "updated " + new Date().toLocaleTimeString();
+      renderLiveness();
+    }).catch(function (err) {
+      failures += 1;
+      if (!warned) {
+        warned = true;  // one line per outage, not one every three seconds
+        console.warn("andro-cfw: dashboard cannot reach the daemon", err && err.message ? err.message : err);
+      }
+      renderLiveness();
+    });
+  }
+
+  // ------------------------------------------------------------------- start
+
+  render(normalise(null));   // an honest empty page before the first response
+  sigs = {};                 // ...but let the first payload re-render everything
+  renderLiveness();
+  poll();
+  setInterval(poll, POLL_MS);
+  setInterval(function () {
+    renderUptime();
+    refreshTickers();
+    renderLiveness();
+  }, 1000);
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") { poll(); }
+  });
+
+  // The chart's viewBox is pinned to its pixel width, so it has to be redrawn
+  // whenever that width changes. Watching the element itself also catches the
+  // layout settling after first paint; only width changes retrigger, so the
+  // height the redraw sets cannot loop.
+  var redrawTimer = 0;
+  function chartMayHaveResized() {
+    clearTimeout(redrawTimer);
+    redrawTimer = setTimeout(function () {
+      var chart = $("chart");
+      var w = Math.round(chart.clientWidth);
+      if (latest && w > 0 && Math.abs(w - chartWidth) > 2) { renderChart(latest); }
+    }, 120);
+  }
+
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(chartMayHaveResized).observe($("chart"));
+  }
+  window.addEventListener("resize", chartMayHaveResized);
+})();
+</script>
+</body>
+</html>

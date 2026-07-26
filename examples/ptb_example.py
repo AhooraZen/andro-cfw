@@ -3,13 +3,13 @@ Example: a minimal echo bot using python-telegram-bot (v20+), routed through
 an andro-cfw Cloudflare Worker proxy.
 
 Setup:
-    pip install andro-cfw "python-telegram-bot>=20.0"
+    pip install git+https://github.com/AhooraZen/andro-cfw.git "python-telegram-bot>=20.0"
     andro-cfw init            # run once, in this same directory
     python ptb_example.py
 """
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 from andro_cfw import CFWSession
 
