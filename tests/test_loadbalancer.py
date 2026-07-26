@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from andro_cfw.loadbalancer import (
+    DEFAULT_FORWARD_USER_AGENT,
     MAX_REQUEST_BODY_BYTES,
     QUOTA_SNIFF_BYTES,
     SPOOL_THRESHOLD_BYTES,
@@ -508,3 +509,51 @@ def test_end_to_end_failover_over_a_real_socket(tmp_path, payload_size):
     assert body == payload
     assert session.workers[0].exhausted_until > time.time()
     assert session.workers[1].exhausted_until == 0.0
+
+
+def test_a_request_without_a_user_agent_gets_a_neutral_one():
+    """
+    urllib stamps "Python-urllib/3.x" on any request that carries no
+    User-Agent, and Cloudflare's Browser Integrity Check answers that exact
+    signature with 403 error 1010 -- before the request ever reaches the
+    Worker. Verified live against a deployed worker: no UA gave 1010, a normal
+    one gave Telegram's real 401.
+    """
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured.update(req.headers)
+        resp = MagicMock()
+        resp.status = 200
+        resp.getheaders.return_value = []
+        resp.read.return_value = b"ok"
+        return resp
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        LoadBalancer._open_upstream("https://w1.workers.dev/bot1/getMe", "GET", {}, None, 0)
+
+    lowered = {k.lower(): v for k, v in captured.items()}
+    assert lowered["user-agent"] == DEFAULT_FORWARD_USER_AGENT
+    assert "python-urllib" not in lowered["user-agent"].lower()
+
+
+def test_the_clients_own_user_agent_is_preserved():
+    """Only a missing one is substituted -- never an override."""
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured.update(req.headers)
+        resp = MagicMock()
+        resp.status = 200
+        resp.getheaders.return_value = []
+        resp.read.return_value = b"ok"
+        return resp
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        LoadBalancer._open_upstream(
+            "https://w1.workers.dev/bot1/getMe", "GET",
+            {"User-Agent": "python-requests/2.32"}, None, 0,
+        )
+
+    lowered = {k.lower(): v for k, v in captured.items()}
+    assert lowered["user-agent"] == "python-requests/2.32"

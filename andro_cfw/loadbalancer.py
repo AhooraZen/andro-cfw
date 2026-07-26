@@ -39,6 +39,14 @@ QUOTA_SNIFF_BYTES = 512
 # A plain 500 is left alone: that is Telegram's own error and the bot should
 # see it.
 RETRYABLE_STATUS = {502, 503, 504}
+
+# urllib stamps "Python-urllib/3.x" on any request that carries no User-Agent,
+# and Cloudflare's Browser Integrity Check answers that signature with a 403
+# (error 1010) before the request ever reaches the Worker. Most Telegram
+# libraries send their own agent, but a client that sends none must not be
+# silently blocked, so a neutral one is substituted.
+DEFAULT_FORWARD_USER_AGENT = "andro-cfw"
+
 MAX_RETRIES_PER_WORKER = 2
 RETRY_BACKOFF_SECONDS = 0.25
 
@@ -361,6 +369,8 @@ class LoadBalancer:
         # quota-marker sniffing in _proxy_with_failover read binary noise.
         skip = HOP_BY_HOP_HEADERS | {"host", "content-length", "accept-encoding"}
         filtered_headers = {k: v for k, v in headers.items() if k.lower() not in skip}
+        if not any(k.lower() == "user-agent" for k in filtered_headers):
+            filtered_headers["User-Agent"] = DEFAULT_FORWARD_USER_AGENT
         if body is not None:
             # http.client streams a file object only when it knows the length;
             # without this it would fall back to chunked encoding.
