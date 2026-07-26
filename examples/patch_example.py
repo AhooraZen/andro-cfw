@@ -1,20 +1,20 @@
 """
-Example: a minimal echo bot using pyTelegramBotAPI (telebot), routed through
-an andro-cfw Cloudflare Worker proxy.
+Example: the one-line integration.
+
+Import your framework first, then call patch(). It rewrites the imported
+framework's API base URL to point at your Cloudflare Worker.
 
 Setup:
     pip install andro-cfw pyTelegramBotAPI
     andro-cfw init            # run once, in this same directory
-    python telebot_example.py
+    python patch_example.py
 """
 
 import telebot
 
-from andro_cfw import CFWSession
+from andro_cfw import patch
 
-session = CFWSession.load()
-telebot.apihelper.API_URL = session.telebot_api_url()
-telebot.apihelper.FILE_URL = session.telebot_file_url()
+session = patch()
 
 BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -22,7 +22,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 @bot.message_handler(commands=["start", "help"])
 def send_welcome(message):
-    bot.reply_to(message, "Hi! I'm running through andro-cfw. Send me anything and I'll echo it.")
+    bot.reply_to(message, "Hi! I'm running through andro-cfw.")
 
 
 @bot.message_handler(func=lambda m: True)

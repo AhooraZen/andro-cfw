@@ -8,12 +8,33 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
+from .session import require_http_url
+
 # Cloudflare Workers Free plan: 100,000 requests/day, resetting at UTC
 # midnight. We treat a 429 response (or a Cloudflare rate-limit page) from
 # a worker as "this account's daily quota is exhausted" and mark it
 # unusable until the next UTC midnight, at which point it automatically
 # becomes eligible again -- no manual reset needed.
 QUOTA_STATUS_CODES = {429}
+
+# Telegram caps uploads at 50 MB. Anything larger is not a legitimate Bot API
+# call, and Content-Length is attacker-controlled, so refuse rather than
+# allocate a buffer of whatever size the header claims.
+MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
+
+# Hop-by-hop headers are connection-scoped and must not be relayed.
+HOP_BY_HOP_HEADERS = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
 CLOUDFLARE_LIMIT_MARKERS = (
     "you have exceeded",
     "rate limit",
@@ -106,7 +127,14 @@ class LoadBalancer:
     def stop(self) -> None:
         if self._server is not None:
             self._server.shutdown()
+            # shutdown() only stops serve_forever; without server_close() the
+            # listening socket stays open for the life of the process.
+            self._server.server_close()
             self._server = None
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
+        self.port = None
 
     def base_url(self) -> str:
         self.start()
@@ -137,13 +165,19 @@ class LoadBalancer:
             w.exhausted_until = _next_utc_midnight()
             w.last_error = reason
             self.session.active_index = self._pick_active_worker()
-            self.session._persist()
-            reset_at = datetime.fromtimestamp(w.exhausted_until, tz=timezone.utc).strftime("%H:%M UTC")
-            print(
-                f"[andro-cfw] Account '{w.account_label or w.worker_name}' hit its daily "
-                f"Cloudflare quota ({reason}). Switching to the next account. "
-                f"This account will automatically be usable again after {reset_at}."
-            )
+
+        # Persist outside the lock: encrypting and fsync-ing the session file
+        # takes milliseconds, and every in-flight proxied request needs this
+        # same lock to pick a worker. The write itself is atomic (see
+        # CFWSession.save), so concurrent persists cannot corrupt the file.
+        self.session._persist()
+
+        reset_at = datetime.fromtimestamp(w.exhausted_until, tz=timezone.utc).strftime("%H:%M UTC")
+        print(
+            f"[andro-cfw] Account '{w.account_label or w.worker_name}' hit its daily "
+            f"Cloudflare quota ({reason}). Switching to the next account. "
+            f"This account will automatically be usable again after {reset_at}."
+        )
 
     # ------------------------------------------------------------ #
     # Request proxying
@@ -154,6 +188,15 @@ class LoadBalancer:
             content_length = int(handler.headers.get("Content-Length", 0) or 0)
         except (ValueError, TypeError):
             content_length = 0
+
+        if content_length < 0 or content_length > MAX_REQUEST_BODY_BYTES:
+            # Never allocate a buffer sized by an unvalidated header.
+            self._send_response(
+                handler, 413, {"Content-Type": "application/json"},
+                b'{"ok":false,"error_code":413,"description":"Request body too large for andro-cfw proxy"}',
+            )
+            return
+
         body = handler.rfile.read(content_length) if content_length else None
 
         tried_indices = set()
@@ -196,19 +239,26 @@ class LoadBalancer:
             self._send_response(handler, status, resp_headers, resp_body)
             return
 
-        # Should not normally get here, but guard against an empty pool.
-        handler.send_response(503)
-        handler.end_headers()
+        # Every account failed, or the pool is empty. Send a framed response:
+        # under HTTP/1.1 a reply with no Content-Length leaves the client
+        # waiting for a body that never arrives.
+        self._send_response(
+            handler, 503, {"Content-Type": "application/json"},
+            b'{"ok":false,"error_code":503,"description":"No healthy Cloudflare Worker available via andro-cfw"}',
+        )
 
     @staticmethod
     def _forward(url: str, method: str, headers: dict, body: Optional[bytes]):
-        filtered_headers = {
-            k: v for k, v in headers.items()
-            if k.lower() not in ("host", "content-length")
-        }
-        req = urllib.request.Request(url, data=body, method=method, headers=filtered_headers)
+        # `accept-encoding` is dropped so the upstream replies uncompressed:
+        # urllib does not decode gzip, and a compressed body would make the
+        # quota-marker sniffing in _proxy_request read binary noise.
+        skip = HOP_BY_HOP_HEADERS | {"host", "content-length", "accept-encoding"}
+        filtered_headers = {k: v for k, v in headers.items() if k.lower() not in skip}
+        req = urllib.request.Request(  # noqa: S310 - scheme pinned by require_http_url
+            require_http_url(url), data=body, method=method, headers=filtered_headers,
+        )
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - scheme pinned above
                 return resp.status, dict(resp.getheaders()), resp.read()
         except urllib.error.HTTPError as http_err:
             return http_err.code, dict(http_err.headers or {}), http_err.read()
@@ -217,7 +267,7 @@ class LoadBalancer:
     def _send_response(handler: BaseHTTPRequestHandler, status: int, headers: dict, body: Optional[bytes]) -> None:
         handler.send_response(status)
         for k, v in headers.items():
-            if k.lower() in ("transfer-encoding", "connection"):
+            if k.lower() in HOP_BY_HOP_HEADERS or k.lower() == "content-length":
                 continue
             handler.send_header(k, v)
         body = body or b""

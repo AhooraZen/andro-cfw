@@ -1,30 +1,32 @@
 import argparse
+import json
+import os
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from andro_cfw.cli import (
     _session_path,
-    cmd_init,
     cmd_add_account,
-    cmd_status,
     cmd_check,
-    cmd_snippet,
-    cmd_remove,
     cmd_deploy_serverless,
+    cmd_init,
+    cmd_remove,
+    cmd_snippet,
+    cmd_status,
     main,
 )
 from andro_cfw.errors import DeploymentError, SessionNotFoundError
-from andro_cfw.session import CFWSession, WorkerEntry, DEFAULT_SESSION_FILENAME
+from andro_cfw.session import DEFAULT_SESSION_FILENAME, CFWSession, WorkerEntry
 
 
 def test_session_path():
     args_none = argparse.Namespace(path=None)
     assert _session_path(args_none) == Path.cwd() / DEFAULT_SESSION_FILENAME
 
-    args_custom = argparse.Namespace(path="/tmp/myproj")
-    assert _session_path(args_custom) == Path("/tmp/myproj") / DEFAULT_SESSION_FILENAME
+    args_custom = argparse.Namespace(path=str(Path("myproj").resolve()))
+    assert _session_path(args_custom) == Path("myproj").resolve() / DEFAULT_SESSION_FILENAME
 
 
 def test_cmd_init_single(tmp_path):
@@ -82,7 +84,7 @@ def test_cmd_add_account(tmp_path):
     mock_session = CFWSession(workers=[WorkerEntry("w1", "https://w1.workers.dev")])
 
     with patch("andro_cfw.session.CFWSession.load", return_value=mock_session), \
-         patch("andro_cfw.cli.cloudflare_login") as mock_login, \
+         patch("andro_cfw.cli.cloudflare_login"), \
          patch("andro_cfw.cli.deploy_worker", return_value=("added-bot-2", "https://w2.workers.dev")), \
          patch.object(mock_session, "save") as mock_save:
 
@@ -196,13 +198,119 @@ def test_main_cli_keyboard_interrupt():
         assert ret == 130
 
 
-def test_cmd_deploy_serverless(tmp_path):
+VALID_TOKEN = "123456789:AAEhBOweik6ad9r_QXbSJLmRbCkuKBDlvBQ"
+
+
+def _serverless_args(tmp_path, **overrides):
+    defaults = dict(token=VALID_TOKEN, forward_url=None, path=str(tmp_path))
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+def _telegram_response(payload: dict):
+    resp = MagicMock()
+    resp.read.return_value = json.dumps(payload).encode()
+    resp.__enter__.return_value = resp
+    return resp
+
+
+def test_cmd_deploy_serverless_success(tmp_path):
     session = CFWSession.new(worker_name="w1", worker_url="https://w1.workers.dev")
-    args = argparse.Namespace(token="12345:TEST_TOKEN", bot_file=None, path=str(tmp_path), yes=True)
 
     with patch("andro_cfw.cli.CFWSession.load", return_value=session), \
-         patch("urllib.request.urlopen", return_value=MagicMock(status=200)):
-        ret = cmd_deploy_serverless(args)
-        assert ret == 0
+         patch("andro_cfw.cli.put_worker_secret") as mock_secret, \
+         patch("urllib.request.urlopen", return_value=_telegram_response({"ok": True, "result": True})):
+        assert cmd_deploy_serverless(_serverless_args(tmp_path)) == 0
+
+    stored = {call.args[1]: call.args[2] for call in mock_secret.call_args_list}
+    assert stored["BOT_TOKEN"] == VALID_TOKEN
+    # A fresh high-entropy secret must be generated, not derived from the token.
+    assert len(stored["WEBHOOK_SECRET"]) >= 32
+    assert VALID_TOKEN not in stored["WEBHOOK_SECRET"]
+
+
+def test_cmd_deploy_serverless_sends_secret_token_and_no_token_in_webhook_url(tmp_path):
+    """
+    Regression guard: the webhook URL handed to Telegram must not embed the bot
+    token. Telegram stores that URL and replays it on every single update.
+    """
+    session = CFWSession.new(worker_name="w1", worker_url="https://w1.workers.dev")
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data.decode())
+        return _telegram_response({"ok": True})
+
+    with patch("andro_cfw.cli.CFWSession.load", return_value=session), \
+         patch("andro_cfw.cli.put_worker_secret"), \
+         patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        assert cmd_deploy_serverless(_serverless_args(tmp_path)) == 0
+
+    assert captured["body"]["url"] == "https://w1.workers.dev/webhook"
+    assert VALID_TOKEN not in captured["body"]["url"]
+    assert captured["body"]["secret_token"]
+    assert captured["url"].endswith("/setWebhook")
+
+
+def test_cmd_deploy_serverless_reports_telegram_rejection(tmp_path):
+    """HTTP 200 with {"ok": false} is a failure, not a success."""
+    session = CFWSession.new(worker_name="w1", worker_url="https://w1.workers.dev")
+    rejection = {"ok": False, "error_code": 401, "description": "Unauthorized"}
+
+    with patch("andro_cfw.cli.CFWSession.load", return_value=session), \
+         patch("andro_cfw.cli.put_worker_secret"), \
+         patch("urllib.request.urlopen", return_value=_telegram_response(rejection)):
+        assert cmd_deploy_serverless(_serverless_args(tmp_path)) == 1
+
+
+@pytest.mark.parametrize("bad", ["no-colon", "abc:def", "123:short", ":onlycolon"])
+def test_cmd_deploy_serverless_rejects_malformed_token(tmp_path, bad):
+    session = CFWSession.new(worker_name="w1", worker_url="https://w1.workers.dev")
+    with patch("andro_cfw.cli.CFWSession.load", return_value=session), \
+         patch("andro_cfw.cli.put_worker_secret") as mock_secret, \
+         patch.dict(os.environ, {}, clear=True):
+        assert cmd_deploy_serverless(_serverless_args(tmp_path, token=bad)) == 1
+    mock_secret.assert_not_called()
+
+
+def test_cmd_deploy_serverless_cancelled_at_prompt(tmp_path):
+    """Ctrl-D at the hidden token prompt exits 130, it does not deploy."""
+    session = CFWSession.new(worker_name="w1", worker_url="https://w1.workers.dev")
+    with patch("andro_cfw.cli.CFWSession.load", return_value=session), \
+         patch("andro_cfw.cli.put_worker_secret") as mock_secret, \
+         patch("andro_cfw.cli.getpass.getpass", side_effect=EOFError), \
+         patch.dict(os.environ, {}, clear=True):
+        assert cmd_deploy_serverless(_serverless_args(tmp_path, token=None)) == 130
+    mock_secret.assert_not_called()
+
+
+def test_cmd_deploy_serverless_reads_token_from_environment(tmp_path):
+    session = CFWSession.new(worker_name="w1", worker_url="https://w1.workers.dev")
+    with patch("andro_cfw.cli.CFWSession.load", return_value=session), \
+         patch("andro_cfw.cli.put_worker_secret") as mock_secret, \
+         patch("urllib.request.urlopen", return_value=_telegram_response({"ok": True})), \
+         patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": VALID_TOKEN}):
+        assert cmd_deploy_serverless(_serverless_args(tmp_path, token=None)) == 0
+    assert mock_secret.call_args_list[0].args[2] == VALID_TOKEN
+
+
+def test_cmd_snippet_refuses_mtproto_frameworks(tmp_path):
+    """pyrogram/hydrogram cannot be proxied; emitting a snippet would mislead."""
+    args = argparse.Namespace(framework="pyrogram", out=str(tmp_path / "bot.py"))
+    assert cmd_snippet(args) == 1
+    assert not (tmp_path / "bot.py").exists()
+
+
+def test_cmd_snippet_patch_oneliner(tmp_path):
+    out_file = tmp_path / "bot.py"
+    assert cmd_snippet(argparse.Namespace(framework="patch", out=str(out_file))) == 0
+    assert "from andro_cfw import patch" in out_file.read_text()
+
+
+def test_cli_exposes_version():
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
 
 

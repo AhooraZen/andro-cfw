@@ -1,23 +1,19 @@
-import os
-import platform
 import subprocess
-from unittest.mock import patch, mock_open, MagicMock
-
-import pytest
+from unittest.mock import MagicMock, mock_open, patch
 
 from andro_cfw.platform_utils import (
     SystemInfo,
-    _read_os_release,
+    _add_to_posix_user_path,
     _first_available,
-    detect_system,
+    _install_linux,
+    _install_macos,
+    _install_windows,
+    _read_os_release,
     _run,
     _sudo_noninteractive_ok,
-    install_nodejs,
-    _install_windows,
-    _install_macos,
-    _install_linux,
     add_to_user_path,
-    _add_to_posix_user_path,
+    detect_system,
+    install_nodejs,
 )
 
 
@@ -307,3 +303,36 @@ def test_add_to_posix_user_path_creates_executable_wrapper(tmp_path):
         assert "#!/bin/sh" in content
         assert "exec" in content
 
+
+
+def test_nodesource_is_opt_in_only(monkeypatch):
+    """
+    Piping a downloaded shell script into `sudo bash` is a trust decision the
+    user has to make explicitly; the distro package is the default.
+    """
+    from andro_cfw import platform_utils as pu
+
+    monkeypatch.delenv("ANDRO_CFW_ALLOW_NODESOURCE", raising=False)
+    assert pu._nodesource_opt_in() is False
+
+    calls = []
+    monkeypatch.setattr(pu, "_install_via_nodesource", lambda: calls.append("nodesource") or True)
+    monkeypatch.setattr(pu, "_run", lambda *a, **k: MagicMock(returncode=0))
+
+    info = pu.SystemInfo("linux", "debian", None, "apt-get", False, "x86_64")
+    assert pu._install_linux(info) is True
+    assert calls == []
+
+
+def test_nodesource_runs_when_explicitly_allowed(monkeypatch):
+    from andro_cfw import platform_utils as pu
+
+    monkeypatch.setenv("ANDRO_CFW_ALLOW_NODESOURCE", "1")
+    assert pu._nodesource_opt_in() is True
+
+    calls = []
+    monkeypatch.setattr(pu, "_install_via_nodesource", lambda: calls.append("nodesource") or True)
+
+    info = pu.SystemInfo("linux", "ubuntu", None, "apt-get", False, "x86_64")
+    assert pu._install_linux(info) is True
+    assert calls == ["nodesource"]

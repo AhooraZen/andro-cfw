@@ -1,15 +1,30 @@
 from __future__ import annotations
 
 import os
+import re
+import stat
 import subprocess
 from pathlib import Path
 from typing import Optional
 
-from .colors import log_step, log_working, log_dim, log_error
+from .colors import log_dim, log_step, log_working
 from .errors import DeploymentError
 from .toolchain import check_node_toolchain
 
 ACCOUNTS_DIR = Path.home() / ".andro_cfw" / "accounts"
+
+# Account labels become directory names under the user's home directory, so
+# they must not be able to escape it (e.g. "../../.ssh").
+_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_account_label(account_label: str) -> str:
+    if not _SAFE_LABEL_RE.match(account_label) or account_label in (".", ".."):
+        raise DeploymentError(
+            f"Invalid account label '{account_label}'. "
+            "Use only letters, digits, dots, dashes and underscores."
+        )
+    return account_label
 
 
 def _account_env(account_label: Optional[str]) -> dict:
@@ -17,11 +32,19 @@ def _account_env(account_label: Optional[str]) -> dict:
     Build an environment dict that isolates wrangler's OAuth token storage
     per account label, so andro-cfw can hold multiple logged-in Cloudflare
     accounts at once (needed for the multi-account load-balancing feature).
+
+    The per-account directory holds live Cloudflare OAuth tokens, so it is
+    created 0700 rather than inheriting the default umask.
     """
     env = os.environ.copy()
     if account_label:
-        account_home = ACCOUNTS_DIR / account_label
+        account_home = ACCOUNTS_DIR / _validate_account_label(account_label)
         account_home.mkdir(parents=True, exist_ok=True)
+        for directory in (ACCOUNTS_DIR, account_home):
+            try:
+                os.chmod(directory, stat.S_IRWXU)
+            except OSError:
+                pass
         env["WRANGLER_HOME"] = str(account_home)
         env["XDG_CONFIG_HOME"] = str(account_home)
     return env

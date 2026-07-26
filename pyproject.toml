@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "andro-cfw"
-version = "0.3.0"
+version = "0.4.0"
 description = "Run Telegram bots from filtered/restricted regions via your own Cloudflare Worker proxy, with cross-platform auto Node.js setup and smart multi-account load balancing (no VPN required)."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -36,3 +36,27 @@ include = ["andro_cfw*"]
 
 [tool.setuptools.package-data]
 "andro_cfw.templates" = ["*.ts", "*.tmpl"]
+"andro_cfw" = ["py.typed"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "S", "RUF"]
+ignore = [
+    "E501",    # line length is handled by the formatter, not enforced here
+    "S603",    # subprocess calls are this tool's core job (wrangler/npx)
+    "S607",    # `npx`/package managers are resolved via PATH by design
+    "UP006",   # supports Python 3.9; PEP 585 generics stay quoted
+    "UP007",   # ditto for PEP 604 unions
+    "UP045",   # ditto for Optional[X]
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]      # asserts and dummy tokens are the point
+"examples/*" = ["S105"]                   # placeholder tokens users replace
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning"]

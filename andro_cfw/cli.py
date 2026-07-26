@@ -1,19 +1,38 @@
 from __future__ import annotations
 
 import argparse
+import getpass
+import json
+import os
+import re
+import secrets
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from .auth import cloudflare_login
 from .colors import (
-    log_info, log_working, log_success, log_error, log_warn, log_notice, log_dim,
-    COLOR_GREEN, COLOR_RESET, COLOR_BOLD, COLOR_CYAN, COLOR_BLUE, COLOR_RED, COLOR_YELLOW, ColoredHelpFormatter
+    COLOR_BOLD,
+    COLOR_CYAN,
+    COLOR_GREEN,
+    COLOR_RED,
+    COLOR_RESET,
+    COLOR_YELLOW,
+    ColoredHelpFormatter,
+    log_dim,
+    log_error,
+    log_info,
+    log_notice,
+    log_success,
+    log_warn,
+    log_working,
 )
-from .deploy import deploy_worker, teardown_worker
+from .deploy import deploy_worker, put_worker_secret, teardown_worker
 from .errors import AndroCFWError
 from .platform_utils import add_to_user_path
-from .session import CFWSession, DEFAULT_SESSION_FILENAME
+from .session import DEFAULT_SESSION_FILENAME, CFWSession, require_http_url
 
 
 def _session_path(args: argparse.Namespace) -> Path:
@@ -187,7 +206,26 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
 
+# Only HTTP Bot API frameworks are listed. pyrogram / hydrogram / telethon
+# speak MTProto straight to Telegram's datacenters, which a Cloudflare Worker
+# HTTP proxy cannot route -- offering a snippet for them would hand the user
+# code that silently does not go through the proxy.
 FRAMEWORK_SNIPPETS = {
+    "patch": """# The one-line option: import your framework first, then call patch().
+import telebot                      # or: import aiogram / import telegram
+from andro_cfw import patch
+
+patch()                             # routes the imported framework through your worker
+
+bot = telebot.TeleBot("YOUR_BOT_TOKEN")
+
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+    bot.reply_to(message, "Hello! This bot is running through andro-cfw.")
+
+if __name__ == "__main__":
+    bot.infinity_polling()
+""",
     "telebot": """import telebot
 from andro_cfw import CFWSession
 
@@ -259,59 +297,21 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 """,
-    "pyrogram": """from pyrogram import Client, filters
-from andro_cfw import CFWSession
-
-# Load your deployed worker proxy session
-session = CFWSession.load()
-
-app = Client(
-    "andro_bot",
-    bot_token="YOUR_BOT_TOKEN",
-    api_id=12345,          # Replace with your Telegram API ID
-    api_hash="YOUR_API_HASH", # Replace with your Telegram API Hash
-)
-
-# Set Pyrogram HTTP base URL override
-app.api_url = session.api_base_url()
-
-@app.on_message(filters.command("start"))
-async def start_cmd(client, message):
-    await message.reply_text("Hello! Pyrogram is running through andro-cfw proxy! 🚀")
-
-if __name__ == "__main__":
-    print("Pyrogram bot starting via andro-cfw proxy...")
-    app.run()
-""",
-    "hydrogram": """from hydrogram import Client, filters
-from andro_cfw import CFWSession
-
-# Load your deployed worker proxy session
-session = CFWSession.load()
-
-app = Client(
-    "andro_bot",
-    bot_token="YOUR_BOT_TOKEN",
-    api_id=12345,          # Replace with your Telegram API ID
-    api_hash="YOUR_API_HASH", # Replace with your Telegram API Hash
-)
-
-# Set Hydrogram HTTP base URL override
-app.api_url = session.api_base_url()
-
-@app.on_message(filters.command("start"))
-async def start_cmd(client, message):
-    await message.reply_text("Hello! Hydrogram is running through andro-cfw proxy! 🚀")
-
-if __name__ == "__main__":
-    print("Hydrogram bot starting via andro-cfw proxy...")
-    app.run()
-""",
 }
+
+MTPROTO_NOTE = (
+    "pyrogram, hydrogram and telethon speak MTProto directly to Telegram's "
+    "datacenters, not the HTTP Bot API. A Cloudflare Worker HTTP proxy cannot "
+    "route them. Use their built-in SOCKS5/MTProto proxy settings instead."
+)
 
 
 def cmd_snippet(args: argparse.Namespace) -> int:
     fw = args.framework.lower()
+    if fw in ("pyrogram", "hydrogram", "telethon"):
+        log_error(f"andro-cfw cannot proxy '{fw}'.")
+        log_dim(MTPROTO_NOTE)
+        return 1
     if fw not in FRAMEWORK_SNIPPETS:
         log_error(f"Unknown framework '{fw}'. Choose from: {', '.join(FRAMEWORK_SNIPPETS.keys())}")
         return 1
@@ -327,6 +327,28 @@ def cmd_snippet(args: argparse.Namespace) -> int:
     return 0
 
 
+# A Bot API token is "<numeric bot id>:<35-char base64url secret>".
+BOT_TOKEN_RE = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{30,}$")
+
+
+def _read_bot_token(args: argparse.Namespace) -> str | None:
+    """
+    Resolve the bot token from --token, $TELEGRAM_BOT_TOKEN, or an interactive
+    prompt. The prompt uses getpass so the token is not echoed to the terminal
+    or captured in a screen recording / shoulder-surfed.
+    """
+    token = getattr(args, "token", None) or os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        try:
+            token = getpass.getpass(
+                f"{COLOR_BOLD}{COLOR_CYAN}[andro-cfw]{COLOR_RESET} "
+                "Telegram Bot Token from @BotFather (input hidden): "
+            )
+        except (KeyboardInterrupt, EOFError):
+            return None
+    return (token or "").strip()
+
+
 def cmd_deploy_serverless(args: argparse.Namespace) -> int:
     session_path = _session_path(args)
 
@@ -334,69 +356,105 @@ def cmd_deploy_serverless(args: argparse.Namespace) -> int:
         session = CFWSession.load(str(session_path) if args.path else None)
     except AndroCFWError:
         log_warn("No active session found. Running `andro-cfw init` first...")
-        init_args = argparse.Namespace(name=args.name if hasattr(args, "name") else None, path=args.path, force=False, accounts=1)
+        init_args = argparse.Namespace(name=getattr(args, "name", None), path=args.path, force=False, accounts=1)
         if cmd_init(init_args) != 0:
             return 1
         session = CFWSession.load(str(session_path) if args.path else None)
 
-    token = getattr(args, "token", None)
-    if not token:
-        try:
-            token = input(f"{COLOR_BOLD}{COLOR_CYAN}[andro-cfw]{COLOR_RESET} Enter your Telegram Bot Token from @BotFather: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            log_warn("\nOperation cancelled.")
-            return 130
-
-    if not token or ":" not in token:
-        log_error("Invalid Telegram Bot Token format. Token must contain a colon (e.g. 123456789:ABCDefgh...)")
+    token = _read_bot_token(args)
+    if token is None:
+        log_warn("\nOperation cancelled.")
+        return 130
+    if not BOT_TOKEN_RE.match(token):
+        log_error(
+            "That does not look like a Telegram bot token. Expected the form "
+            "123456789:AA... as issued by @BotFather."
+        )
         return 1
 
-    bot_file = getattr(args, "bot_file", None)
-    if not bot_file and not getattr(args, "yes", False):
-        try:
-            bot_file = input(f"{COLOR_BOLD}{COLOR_CYAN}[andro-cfw]{COLOR_RESET} Optional: Enter path to your bot script file (Python/JS/etc) [Press Enter to skip]: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            pass
+    worker = session.workers[0] if session.workers else None
+    if worker is None:
+        log_error("This session has no deployed worker. Run `andro-cfw init` first.")
+        return 1
+    worker_url = worker.worker_url.rstrip("/")
+    webhook_url = f"{worker_url}/webhook"
 
-    if bot_file and Path(bot_file).exists():
-        log_info(f"Detected bot script at '{bot_file}'.")
+    # Telegram echoes this secret in the X-Telegram-Bot-Api-Secret-Token header
+    # of every update, and the worker rejects updates without it. That is what
+    # stops anyone who learns the worker URL from injecting fake updates.
+    webhook_secret = secrets.token_urlsafe(32)
 
-    import urllib.parse
-    worker_url = session.worker_url.rstrip("/")
-    webhook_url = f"{worker_url}/webhook?token={token}"
-    telegram_set_webhook_url = f"https://api.telegram.org/bot{token}/setWebhook?url={urllib.parse.quote(webhook_url, safe='')}"
-
-    log_working("Registering 100% Serverless Webhook on Cloudflare Edge...")
-
-    # Attempt automatic Webhook registration through the worker proxy itself
-    import urllib.request
-    proxy_webhook_req = f"{worker_url}/bot{token}/setWebhook?url={urllib.parse.quote(webhook_url, safe='')}"
-    registered = False
+    log_working("Storing bot credentials as encrypted Cloudflare Worker secrets...")
     try:
-        req = urllib.request.Request(proxy_webhook_req, headers={"User-Agent": "andro-cfw"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status == 200:
-                registered = True
-    except Exception:
-        pass
+        put_worker_secret(worker.worker_name, "BOT_TOKEN", token, worker.account_label)
+        put_worker_secret(worker.worker_name, "WEBHOOK_SECRET", webhook_secret, worker.account_label)
+        forward_url = getattr(args, "forward_url", None)
+        if forward_url:
+            put_worker_secret(worker.worker_name, "FORWARD_WEBHOOK_URL", forward_url, worker.account_label)
+    except AndroCFWError as exc:
+        log_error(f"{exc}")
+        return 1
 
-    log_success("100% Serverless Cloudflare Bot Deployment Complete! 🚀")
-    print(f"\n  {COLOR_BOLD}Worker URL{COLOR_RESET}   : {COLOR_CYAN}{worker_url}{COLOR_RESET}")
-    print(f"  {COLOR_BOLD}Webhook URL{COLOR_RESET}  : {COLOR_CYAN}{webhook_url}{COLOR_RESET}")
-    if registered:
-        print(f"  {COLOR_BOLD}Webhook Status{COLOR_RESET}: {COLOR_GREEN}Registered successfully with Telegram!{COLOR_RESET}")
-    else:
-        print(f"  {COLOR_BOLD}Webhook Status{COLOR_RESET}: {COLOR_YELLOW}Ready for registration{COLOR_RESET}")
+    log_working("Registering the webhook with Telegram through your worker...")
+    ok, description = _register_webhook(worker_url, token, webhook_url, webhook_secret)
 
-    print(f"\n{COLOR_BOLD}{COLOR_BLUE}🔗 Direct Webhook Registration Link:{COLOR_RESET}")
-    print(f"   {COLOR_CYAN}{telegram_set_webhook_url}{COLOR_RESET}\n")
+    print(f"\n  {COLOR_BOLD}Worker URL{COLOR_RESET}    : {COLOR_CYAN}{worker_url}{COLOR_RESET}")
+    print(f"  {COLOR_BOLD}Webhook URL{COLOR_RESET}   : {COLOR_CYAN}{webhook_url}{COLOR_RESET}")
+    if forward_url:
+        print(f"  {COLOR_BOLD}Forwarding to{COLOR_RESET} : {COLOR_CYAN}{forward_url}{COLOR_RESET}")
 
-    log_notice("ℹ️  Note on Browser Webhook Registration:")
-    log_dim("   Since api.telegram.org is network-filtered in restricted regions, please ensure")
-    log_dim("   your VPN is enabled for 2 seconds if opening the api.telegram.org link in your browser.")
-    log_dim("   You ONLY need a VPN for this one-time setup link. Afterwards, Telegram and Cloudflare")
-    log_dim("   communicate 24/7 in the cloud with ZERO VPN required forever!\n")
-    return 0
+    if ok:
+        print(f"  {COLOR_BOLD}Webhook Status{COLOR_RESET}: {COLOR_GREEN}Registered with Telegram{COLOR_RESET}\n")
+        log_success("Serverless Cloudflare bot deployment complete.")
+        if not forward_url:
+            log_notice(
+                "No --forward-url was given, so the worker will accept and "
+                "acknowledge updates without routing them anywhere yet."
+            )
+        return 0
+
+    print(f"  {COLOR_BOLD}Webhook Status{COLOR_RESET}: {COLOR_RED}Not registered{COLOR_RESET}\n")
+    log_error(f"Telegram rejected the webhook registration: {description}")
+    log_dim("The worker itself is deployed and its secrets are stored; only the")
+    log_dim("setWebhook call failed. Re-run this command to retry.")
+    return 1
+
+
+def _register_webhook(worker_url: str, token: str, webhook_url: str, secret: str) -> tuple[bool, str]:
+    """
+    Call setWebhook via the deployed worker and report Telegram's own verdict.
+
+    Returns (ok, description). An HTTP 200 is not success on its own: the Bot
+    API answers `{"ok": false, "description": ...}` with status 200 for many
+    rejections, so the JSON body is what decides.
+    """
+    payload = json.dumps({
+        "url": webhook_url,
+        "secret_token": secret,
+        "drop_pending_updates": True,
+    }).encode("utf-8")
+
+    request = urllib.request.Request(  # noqa: S310 - scheme pinned by require_http_url
+        require_http_url(f"{worker_url}/bot{token}/setWebhook"),
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": "andro-cfw"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as resp:  # noqa: S310 - scheme pinned above
+            body = json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        try:
+            body = json.loads(exc.read().decode("utf-8", "replace"))
+        except Exception:
+            return False, f"HTTP {exc.code} from the worker"
+    except Exception as exc:
+        return False, str(exc)
+
+    if isinstance(body, dict) and body.get("ok") is True:
+        return True, str(body.get("description", "ok"))
+    description = body.get("description", "unknown error") if isinstance(body, dict) else "malformed response"
+    return False, str(description)
 
 
 def main(argv=None) -> int:
@@ -405,6 +463,8 @@ def main(argv=None) -> int:
         description=f"{COLOR_BOLD}{COLOR_CYAN}andro-cfw{COLOR_RESET} - Run Telegram bots through your own Cloudflare Worker proxy.",
         formatter_class=ColoredHelpFormatter,
     )
+    from . import __version__
+    parser.add_argument("--version", action="version", version=f"andro-cfw {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init", help="Log into Cloudflare and deploy the proxy worker(s) for this project.", formatter_class=ColoredHelpFormatter)
@@ -420,10 +480,16 @@ def main(argv=None) -> int:
     p_init.set_defaults(func=cmd_init)
 
     p_serverless = sub.add_parser("deploy-serverless", aliases=["serverless", "deploy-webhook"], help="Deploy a 100% serverless 24/7 Telegram bot to Cloudflare Edge.", formatter_class=ColoredHelpFormatter)
-    p_serverless.add_argument("--token", help="Telegram bot token from @BotFather")
-    p_serverless.add_argument("--bot-file", help="Path to bot code file (Python, JS, etc.)")
+    p_serverless.add_argument(
+        "--token",
+        help="Telegram bot token from @BotFather. Prefer $TELEGRAM_BOT_TOKEN or the "
+             "hidden prompt: an argv token is visible to every process on the machine.",
+    )
+    p_serverless.add_argument(
+        "--forward-url",
+        help="Your backend URL. Updates received by the worker are POSTed here verbatim.",
+    )
     p_serverless.add_argument("--path", help="Project directory (default: current directory)")
-    p_serverless.add_argument("--yes", "-y", action="store_true", help="Skip interactive prompts")
     p_serverless.set_defaults(func=cmd_deploy_serverless)
 
     p_add = sub.add_parser("add-account", help="Add one more Cloudflare account/worker to an existing load-balanced session.", formatter_class=ColoredHelpFormatter)
@@ -440,8 +506,13 @@ def main(argv=None) -> int:
     p_check.add_argument("--timeout", type=int, default=5, help="HTTP connection timeout in seconds (default: 5)")
     p_check.set_defaults(func=cmd_check)
 
-    p_snippet = sub.add_parser("snippet", help="Generate ready-to-run Python code for telebot, ptb, aiogram, pyrogram, or hydrogram.", formatter_class=ColoredHelpFormatter)
-    p_snippet.add_argument("--framework", "-f", default="telebot", choices=["telebot", "ptb", "aiogram", "pyrogram", "hydrogram"], help="Framework name (default: telebot)")
+    p_snippet = sub.add_parser("snippet", help="Generate ready-to-run Python code for telebot, ptb, or aiogram.", formatter_class=ColoredHelpFormatter)
+    # No `choices=`: cmd_snippet explains *why* pyrogram/hydrogram are refused,
+    # which argparse's "invalid choice" error cannot.
+    p_snippet.add_argument(
+        "--framework", "-f", default="telebot", metavar="{" + ",".join(sorted(FRAMEWORK_SNIPPETS)) + "}",
+        help="Framework name (default: telebot)",
+    )
     p_snippet.add_argument("--out", "-o", help="Optional output file path to write code to (e.g. bot.py)")
     p_snippet.set_defaults(func=cmd_snippet)
 

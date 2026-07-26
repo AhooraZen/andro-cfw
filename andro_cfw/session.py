@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tempfile
 import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,17 @@ DEFAULT_SESSION_FILENAME = "cfw.session"
 KEY_DIR = Path.home() / ".andro_cfw"
 KEY_FILE = KEY_DIR / "key"
 
+_OWNER_ONLY_FILE = stat.S_IRUSR | stat.S_IWUSR          # 0600
+_OWNER_ONLY_DIR = stat.S_IRWXU                          # 0700
+
+
+def _restrict(path: Path, mode: int) -> None:
+    """Best-effort chmod. Silently ignored on filesystems without POSIX modes."""
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
 
 def _ensure_key() -> bytes:
     """
@@ -23,18 +35,38 @@ def _ensure_key() -> bytes:
 
     The key lives outside the project directory (in the user's home folder)
     so that committing cfw.session to a repo by mistake does NOT leak the
-    worker URL / metadata. The key file is created with 0600 permissions.
+    worker URL / metadata. Both the directory and the key file are restricted
+    to the owner (0700 / 0600).
     """
     KEY_DIR.mkdir(parents=True, exist_ok=True)
+    _restrict(KEY_DIR, _OWNER_ONLY_DIR)
     if not KEY_FILE.exists():
         key = Fernet.generate_key()
         KEY_FILE.write_bytes(key)
-        try:
-            os.chmod(KEY_FILE, stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:
-            pass
+        _restrict(KEY_FILE, _OWNER_ONLY_FILE)
         return key
     return KEY_FILE.read_bytes()
+
+
+def require_http_url(url: str) -> str:
+    """
+    Assert a URL is http(s) before handing it to urllib.
+
+    urlopen honours `file:`, `ftp:` and custom schemes. Worker URLs come from
+    wrangler output and from the on-disk session, so pin the scheme rather than
+    trusting either to stay well-formed.
+    """
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        raise SessionNotFoundError(
+            f"Refusing to use a non-HTTP worker URL: {url!r}. "
+            "Re-run `andro-cfw init` to regenerate the session."
+        )
+    return url
+
+
+def _known_fields(cls) -> set:
+    """Field names `cls` accepts, so data from a newer version can be dropped."""
+    return {f.name for f in fields(cls)}
 
 
 @dataclass
@@ -98,11 +130,14 @@ class CFWSession:
     def __post_init__(self):
         # Normalize dicts (from JSON) into WorkerEntry objects.
         normalized = []
+        allowed = _known_fields(WorkerEntry)
         for w in self.workers:
             if isinstance(w, WorkerEntry):
                 normalized.append(w)
             elif isinstance(w, dict):
-                normalized.append(WorkerEntry(**w))
+                # Drop keys a newer andro-cfw may have added, so an older
+                # install can still read a session it did not write.
+                normalized.append(WorkerEntry(**{k: v for k, v in w.items() if k in allowed}))
         self.workers = normalized
 
         # Migrate an old-style single-worker session into the new
@@ -140,15 +175,28 @@ class CFWSession:
         }
         payload = json.dumps(data).encode("utf-8")
         token = fernet.encrypt(payload)
-        target.write_bytes(token)
+
+        # Write to a sibling temp file and rename over the target. The load
+        # balancer persists quota state from request threads, so a plain
+        # write_bytes can interleave and leave a truncated, undecryptable
+        # session behind -- which forces the user to re-run `andro-cfw init`.
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
+        tmp_path = Path(tmp_name)
         try:
-            os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:
-            pass
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(token)
+                fh.flush()
+                os.fsync(fh.fileno())
+            _restrict(tmp_path, _OWNER_ONLY_FILE)
+            os.replace(tmp_path, target)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
         return target
 
     @classmethod
-    def load(cls, path: Optional[str] = None) -> "CFWSession":
+    def load(cls, path: Optional[str] = None) -> CFWSession:
         """
         Load and decrypt cfw.session from the given path (or the current
         working directory by default).
@@ -169,13 +217,28 @@ class CFWSession:
                 "This usually means it was created on a different machine/user. "
                 "Re-run `andro-cfw init` to regenerate it."
             ) from exc
-        data = json.loads(raw.decode("utf-8"))
-        session = cls(**data)
-        session._session_path = target
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SessionNotFoundError(
+                f"'{target}' decrypted but its contents are not valid session data. "
+                "Re-run `andro-cfw init` to regenerate it."
+            ) from exc
+        if not isinstance(data, dict):
+            raise SessionNotFoundError(
+                f"'{target}' does not contain a session object. "
+                "Re-run `andro-cfw init` to regenerate it."
+            )
+        # Ignore fields written by a newer andro-cfw rather than raising TypeError.
+        allowed = _known_fields(cls)
+        session = cls(**{k: v for k, v in data.items() if k in allowed})
+        # Runtime-only breadcrumb so _persist() can re-save in place. Not a
+        # dataclass field, so it is never serialized back into the file.
+        session._session_path = target  # type: ignore[attr-defined]
         return session
 
     @classmethod
-    def new(cls, worker_name: str, worker_url: str, account_id: Optional[str] = None) -> "CFWSession":
+    def new(cls, worker_name: str, worker_url: str, account_id: Optional[str] = None) -> CFWSession:
         return cls(
             workers=[WorkerEntry(worker_name=worker_name, worker_url=worker_url, account_id=account_id)],
             active_index=0,
@@ -183,7 +246,7 @@ class CFWSession:
         )
 
     @classmethod
-    def new_multi(cls, entries: list) -> "CFWSession":
+    def new_multi(cls, entries: list) -> CFWSession:
         """Create a session backed by several (worker_name, worker_url, account_label) tuples."""
         workers = [
             WorkerEntry(worker_name=n, worker_url=u, account_label=lbl)
@@ -201,7 +264,7 @@ class CFWSession:
         path = getattr(self, "_session_path", None)
         try:
             self.save(str(path) if path else None)
-        except Exception:
+        except Exception:  # noqa: S110 - quota bookkeeping must never break a live bot
             pass
 
     def _get_load_balancer(self):
@@ -228,6 +291,11 @@ class CFWSession:
         lb = self._get_load_balancer()
         if lb is not None:
             return lb.base_url()
+        if not self.worker_url:
+            raise SessionNotFoundError(
+                "This session has no deployed worker. "
+                "Run `andro-cfw init` in your project directory first."
+            )
         return self.worker_url.rstrip("/")
 
     def telebot_api_url(self) -> str:
@@ -269,26 +337,40 @@ class CFWSession:
             status = 0
             latency = 0.0
             error = None
+            conn = None
             try:
                 parsed = urllib.parse.urlparse(w.worker_url)
-                host = parsed.netloc or w.worker_url.replace("https://", "").replace("http://", "").split("/")[0]
-                conn = http.client.HTTPSConnection(host, timeout=timeout)
+                host = parsed.netloc or w.worker_url.split("//")[-1].split("/")[0]
+                path = parsed.path or "/"
+                connector = (
+                    http.client.HTTPConnection
+                    if parsed.scheme == "http"
+                    else http.client.HTTPSConnection
+                )
+                conn = connector(host, timeout=timeout)
+                headers = {"User-Agent": "andro-cfw-health-check"}
 
-                # Warmup TCP+TLS connection
-                conn.request("GET", "/", headers={"User-Agent": "andro-cfw-health-check"})
-                resp1 = conn.getresponse()
-                resp1.read()
+                # Warm up the TCP+TLS handshake so it is excluded from the
+                # measurement below -- otherwise this reports connect time,
+                # not the round-trip latency the bot will actually experience.
+                conn.request("GET", path, headers=headers)
+                conn.getresponse().read()
 
                 # Measure true Keep-Alive latency
                 start = time.time()
-                conn.request("GET", "/", headers={"User-Agent": "andro-cfw-health-check"})
-                resp2 = conn.getresponse()
-                resp2.read()
+                conn.request("GET", path, headers=headers)
+                resp = conn.getresponse()
+                resp.read()
                 latency = (time.time() - start) * 1000
-                status = resp2.status
-                conn.close()
+                status = resp.status
             except Exception as exc:
                 error = str(exc)
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:  # noqa: S110 - close failures are not health results
+                        pass
 
             results.append({
                 "index": i,

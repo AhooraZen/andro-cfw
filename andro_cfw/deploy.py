@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from .auth import _account_env
-from .colors import log_working, log_success, log_error
+from .colors import log_success, log_working
 from .errors import DeploymentError
 from .toolchain import check_node_toolchain
 
@@ -79,6 +79,36 @@ def deploy_worker(
         worker_url = match.group(0)
         log_success(f"Worker successfully deployed: {worker_url}")
         return worker_name, worker_url
+
+
+def put_worker_secret(
+    worker_name: str,
+    key: str,
+    value: str,
+    account_label: Optional[str] = None,
+) -> None:
+    """
+    Store `value` as an encrypted Cloudflare Worker secret named `key`.
+
+    The value is piped over stdin, never passed as an argv element -- process
+    arguments are readable by any other process on the machine via /proc.
+    """
+    check_node_toolchain()
+    result = subprocess.run(
+        ["npx", "--yes", "wrangler", "secret", "put", key, "--name", worker_name],
+        input=value,
+        capture_output=True,
+        text=True,
+        env=_account_env(account_label),
+    )
+    if result.returncode != 0:
+        # Redact: wrangler echoes the binding name, but never trust output with
+        # a secret in scope to be safe to print verbatim.
+        raise DeploymentError(
+            f"Failed to store the '{key}' secret on worker '{worker_name}'. "
+            "Check that you are logged in (`andro-cfw init`) and that the worker exists."
+        )
+    log_success(f"Stored '{key}' as an encrypted Cloudflare Worker secret.")
 
 
 def teardown_worker(worker_name: str, account_label: Optional[str] = None) -> None:

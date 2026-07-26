@@ -1,144 +1,231 @@
 /**
- * andro-cfw Telegram Bot API reverse proxy & serverless webhook engine.
+ * andro-cfw Telegram Bot API reverse proxy & serverless webhook relay.
  *
- * Provides dual capabilities:
- * 1. Pass-through Reverse Proxy: Forwards requests unchanged to api.telegram.org.
- * 2. Serverless Webhook Engine: Handles Telegram updates directly at Cloudflare Edge.
+ * Two capabilities:
+ *   1. Pass-through reverse proxy: forwards every request unchanged to
+ *      api.telegram.org, so a Telegram library in a filtered region can reach
+ *      the Bot API by pointing at this worker instead.
+ *   2. Serverless webhook relay: accepts Telegram updates at POST /webhook,
+ *      authenticates them, and forwards them to FORWARD_WEBHOOK_URL.
+ *
+ * Configuration (all optional, set with `wrangler secret put <NAME>`):
+ *   BOT_TOKEN            Bot token, if the deployment needs one server-side.
+ *                        NEVER read from the request URL.
+ *   WEBHOOK_SECRET       Shared secret Telegram sends back in the
+ *                        X-Telegram-Bot-Api-Secret-Token header. When set,
+ *                        /webhook rejects any update without a matching value.
+ *   FORWARD_WEBHOOK_URL  Your own backend. Updates are POSTed here verbatim.
+ *   ALLOWED_ORIGINS      Comma-separated browser origins allowed to call this
+ *                        worker via CORS, or "*" to allow any. Unset means no
+ *                        CORS headers are emitted at all (the safe default:
+ *                        Telegram libraries do not need them).
  */
 
 export interface Env {
   BOT_TOKEN?: string;
-  SECRET_TOKEN?: string;
+  WEBHOOK_SECRET?: string;
   FORWARD_WEBHOOK_URL?: string;
+  ALLOWED_ORIGINS?: string;
 }
 
 const TELEGRAM_ORIGIN = "https://api.telegram.org";
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT, DELETE",
-  "Access-Control-Allow-Headers": "*",
-};
+/**
+ * Hop-by-hop headers must not be forwarded to the origin or echoed back to the
+ * client; the runtime manages framing itself.
+ */
+const HOP_BY_HOP = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+/**
+ * Resolve CORS headers for a request. Returns an empty object unless the
+ * deployer opted in via ALLOWED_ORIGINS, so by default this worker is not a
+ * general-purpose CORS bypass for api.telegram.org.
+ */
+function corsHeaders(request: Request, env: Env): Record<string, string> {
+  const allowed = (env.ALLOWED_ORIGINS || "").trim();
+  if (!allowed) return {};
+
+  const origin = request.headers.get("Origin");
+  if (!origin) return {};
+
+  const isAllowed =
+    allowed === "*" ||
+    allowed
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .includes(origin);
+
+  if (!isAllowed) return {};
+
+  return {
+    "Access-Control-Allow-Origin": allowed === "*" ? "*" : origin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
+
+/**
+ * Length-independent, timing-safe string comparison. A naive `===` on a secret
+ * can leak information about it through response timing.
+ */
+function secretsMatch(a: string, b: string): boolean {
+  const encoder = new TextEncoder();
+  const left = encoder.encode(a);
+  const right = encoder.encode(b);
+  let diff = left.length ^ right.length;
+  const max = Math.max(left.length, right.length);
+  for (let i = 0; i < max; i++) {
+    diff |= (left[i] ?? 0) ^ (right[i] ?? 0);
+  }
+  return diff === 0;
+}
+
+async function handleWebhook(
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+): Promise<Response> {
+  // Telegram echoes the secret configured via setWebhook(secret_token=...).
+  // Without it, anyone who learns this URL can inject fabricated updates.
+  if (env.WEBHOOK_SECRET) {
+    const received = request.headers.get("X-Telegram-Bot-Api-Secret-Token") || "";
+    if (!secretsMatch(received, env.WEBHOOK_SECRET)) {
+      return new Response("Unauthorized", { status: 401, headers: cors });
+    }
+  }
+
+  if (!env.FORWARD_WEBHOOK_URL) {
+    // Nothing to relay to. Still 200, so Telegram does not retry forever.
+    return new Response("OK (no FORWARD_WEBHOOK_URL configured)", {
+      status: 200,
+      headers: { "Content-Type": "text/plain", ...cors },
+    });
+  }
+
+  let payload: string;
+  try {
+    payload = await request.text();
+  } catch (err) {
+    console.error("Failed to read webhook body:", err);
+    return new Response("OK", { status: 200, headers: cors });
+  }
+
+  try {
+    await fetch(env.FORWARD_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+    });
+  } catch (err) {
+    // Swallow downstream failures: a non-200 makes Telegram redeliver the same
+    // update indefinitely, which amplifies a backend outage into a retry loop.
+    console.error("Failed to forward update to FORWARD_WEBHOOK_URL:", err);
+  }
+
+  return new Response("OK", { status: 200, headers: cors });
+}
+
+async function handleProxy(
+  request: Request,
+  url: URL,
+  cors: Record<string, string>,
+): Promise<Response> {
+  const targetUrl = TELEGRAM_ORIGIN + url.pathname + url.search;
+
+  const forwardHeaders = new Headers();
+  for (const [key, value] of request.headers) {
+    const lowered = key.toLowerCase();
+    if (!HOP_BY_HOP.has(lowered) && lowered !== "host") {
+      forwardHeaders.set(key, value);
+    }
+  }
+
+  const init: RequestInit = {
+    method: request.method,
+    headers: forwardHeaders,
+    body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
+    // @ts-ignore - required by the Workers runtime for streaming request bodies
+    duplex: "half",
+  };
+
+  try {
+    const upstream = await fetch(targetUrl, init);
+
+    const responseHeaders = new Headers();
+    for (const [key, value] of upstream.headers) {
+      if (!HOP_BY_HOP.has(key.toLowerCase())) {
+        responseHeaders.set(key, value);
+      }
+    }
+    responseHeaders.set("X-Content-Type-Options", "nosniff");
+    for (const [key, value] of Object.entries(cors)) {
+      responseHeaders.set(key, value);
+    }
+
+    return new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: responseHeaders,
+    });
+  } catch (err) {
+    console.error("Proxy error:", err);
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error_code: 502,
+        description: "Bad Gateway via andro-cfw proxy",
+      }),
+      {
+        status: 502,
+        headers: { "Content-Type": "application/json", ...cors },
+      },
+    );
+  }
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const cors = corsHeaders(request, env);
 
-    // 1. Handle CORS preflight OPTIONS requests
+    // 1. CORS preflight
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: CORS_HEADERS,
-      });
+      return new Response(null, { status: 204, headers: cors });
     }
 
-    // 2. Health check endpoint
+    // 2. Health check, used by `andro-cfw check`
     if (url.pathname === "/" || url.pathname === "") {
-      return new Response("andro-cfw proxy & serverless engine is running.", {
+      return new Response("andro-cfw proxy is running.", {
         status: 200,
-        headers: { "Content-Type": "text/plain", ...CORS_HEADERS },
+        headers: { "Content-Type": "text/plain", ...cors },
       });
     }
 
-    // 3. Serverless Webhook Handler (POST /webhook, /webhook?token=..., /webhook/:token)
-    if (request.method === "POST" && url.pathname.includes("/webhook")) {
-      // Optional Secret Token verification if configured
-      if (env.SECRET_TOKEN) {
-        const receivedSecret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
-        if (receivedSecret !== env.SECRET_TOKEN) {
-          return new Response("Unauthorized", { status: 401 });
-        }
+    // 3. Serverless webhook relay. Exact path only -- a substring match would
+    //    also swallow proxied Bot API calls such as /bot<token>/setWebhook.
+    if (url.pathname === "/webhook") {
+      if (request.method !== "POST") {
+        return new Response("Method Not Allowed", {
+          status: 405,
+          headers: { Allow: "POST", ...cors },
+        });
       }
-
-      try {
-        let token = url.searchParams.get("token") || env.BOT_TOKEN;
-        if (!token) {
-          const parts = url.pathname.split("/").filter(Boolean);
-          const idx = parts.indexOf("webhook");
-          if (idx !== -1 && parts.length > idx + 1) {
-            token = parts[idx + 1];
-          }
-        }
-
-        const update = (await request.json()) as any;
-
-        // If a custom downstream webhook backend URL is configured, forward the update payload to it
-        if (env.FORWARD_WEBHOOK_URL) {
-          await fetch(env.FORWARD_WEBHOOK_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(update),
-          });
-        }
-
-        if (update && update.message && update.message.text && token) {
-          const chatId = update.message.chat.id;
-          const text = update.message.text.trim();
-
-          let replyText: string | null = null;
-
-          if (text.startsWith("/start") || text.startsWith("/help")) {
-            replyText =
-              "🤖 *I'm Useless*\n\n" +
-              "⚡ *Response Latency*: `~5 ms` (100% Serverless Edge)\n" +
-              "🌐 *Host*: Cloudflare Worker\n" +
-              "🔒 *Uptime*: 24/7 (No laptop/server required)";
-          } else if (text.startsWith("/ping")) {
-            replyText = "🏓 *Pong!* (Cloudflare Edge Latency: `< 5ms`)";
-          } else if (text.startsWith("/status")) {
-            replyText = "🟢 *Worker Status*: Healthy & Active\n🌐 *Region*: Cloudflare Anycast POP";
-          } else if (text.startsWith("/echo ")) {
-            replyText = `📢 ${text.slice(6)}`;
-          }
-
-          if (replyText) {
-            const replyUrl = `${TELEGRAM_ORIGIN}/bot${token}/sendMessage`;
-            await fetch(replyUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                chat_id: chatId,
-                text: replyText,
-                parse_mode: "Markdown",
-              }),
-            });
-          }
-        }
-      } catch (err) {
-        console.error("Webhook processing error:", err);
-      }
-      return new Response("OK", { status: 200, headers: CORS_HEADERS });
+      return handleWebhook(request, env, cors);
     }
 
-    // 4. Transparent Pass-through Reverse Proxy
-    const targetUrl = TELEGRAM_ORIGIN + url.pathname + url.search;
-
-    const init: RequestInit = {
-      method: request.method,
-      headers: request.headers,
-      body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
-      // @ts-ignore - required by Cloudflare Workers runtime for streaming bodies
-      duplex: "half",
-    };
-
-    try {
-      const upstreamResponse = await fetch(targetUrl, init);
-
-      const responseHeaders = new Headers(upstreamResponse.headers);
-      responseHeaders.set("Access-Control-Allow-Origin", "*");
-      responseHeaders.set("X-Content-Type-Options", "nosniff");
-
-      return new Response(upstreamResponse.body, {
-        status: upstreamResponse.status,
-        statusText: upstreamResponse.statusText,
-        headers: responseHeaders,
-      });
-    } catch (proxyErr) {
-      console.error("Proxy error:", proxyErr);
-      return new Response(JSON.stringify({ ok: false, error_code: 502, description: "Bad Gateway via andro-cfw proxy" }), {
-        status: 502,
-        headers: { "Content-Type": "application/json", ...CORS_HEADERS },
-      });
-    }
+    // 4. Transparent pass-through reverse proxy
+    return handleProxy(request, url, cors);
   },
 };

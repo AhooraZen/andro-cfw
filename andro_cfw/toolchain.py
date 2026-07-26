@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 
@@ -44,6 +45,11 @@ def check_node_toolchain(auto_install: bool = True) -> SystemInfo:
 
     if _node_present():
         return info
+
+    # Installing system packages is a privileged, machine-wide side effect.
+    # ANDRO_CFW_NO_AUTO_INSTALL lets CI and locked-down machines refuse it.
+    if os.environ.get("ANDRO_CFW_NO_AUTO_INSTALL", "").strip().lower() in ("1", "true", "yes"):
+        auto_install = False
 
     if not auto_install:
         raise ToolchainMissingError(_manual_instructions(info))

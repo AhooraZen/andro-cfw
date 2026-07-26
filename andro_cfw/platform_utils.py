@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .colors import log_info, log_working, log_success, log_error, log_dim
+from .colors import log_dim, log_error, log_info, log_success, log_warn, log_working
 
 
 @dataclass
@@ -52,7 +52,7 @@ def _read_os_release() -> dict:
     path = "/etc/os-release"
     if os.path.exists(path):
         try:
-            with open(path, "r", encoding="utf-8") as fh:
+            with open(path, encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
                     if not line or "=" not in line:
@@ -180,7 +180,7 @@ def install_nodejs(info: SystemInfo) -> bool:
     except subprocess.TimeoutExpired:
         log_error("Installation timed out.")
         return False
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log_error(f"Automatic installation failed: {exc}")
         return False
 
@@ -218,21 +218,50 @@ def _install_macos(info: SystemInfo) -> bool:
     return False
 
 
+def _nodesource_opt_in() -> bool:
+    """
+    Whether the user opted in to the NodeSource installer.
+
+    Installing from NodeSource means downloading a shell script over the
+    network and executing it as root. That is a meaningful trust decision and
+    andro-cfw will not make it silently on the user's behalf -- the Debian /
+    Ubuntu `nodejs` package works for wrangler and is the default.
+    """
+    return os.environ.get("ANDRO_CFW_ALLOW_NODESOURCE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _install_via_nodesource() -> bool:
+    """Run NodeSource's setup script as root, then install nodejs. Opt-in only."""
+    fetcher = None
+    if shutil.which("curl"):
+        fetcher = ["curl", "-fsSL"]
+    elif shutil.which("wget"):
+        fetcher = ["wget", "-qO-"]
+    if fetcher is None:
+        return False
+
+    log_warn(
+        "ANDRO_CFW_ALLOW_NODESOURCE is set: downloading and running "
+        "https://deb.nodesource.com/setup_lts.x as root."
+    )
+    setup = subprocess.run(
+        [*fetcher, "https://deb.nodesource.com/setup_lts.x"],
+        capture_output=True, timeout=60,
+    )
+    if setup.returncode != 0 or not setup.stdout:
+        return False
+
+    _run(["bash", "-c", setup.stdout.decode("utf-8", "ignore")], use_sudo=True)
+    return _run(["apt-get", "install", "-y", "nodejs"], use_sudo=True).returncode == 0
+
+
 def _install_linux(info: SystemInfo) -> bool:
     pm = info.package_manager
     if pm in ("apt-get", "apt"):
-        if shutil.which("curl") or shutil.which("wget"):
-            fetcher = ["curl", "-fsSL"] if shutil.which("curl") else ["wget", "-qO-"]
-            setup = subprocess.run(
-                [*fetcher, "https://deb.nodesource.com/setup_lts.x"],
-                capture_output=True, timeout=60,
-            )
-            if setup.returncode == 0 and setup.stdout:
-                bash_cmd = ["bash", "-c", setup.stdout.decode("utf-8", "ignore")]
-                _run(bash_cmd, use_sudo=True)
-                result = _run(["apt-get", "install", "-y", "nodejs"], use_sudo=True)
-                if result.returncode == 0:
-                    return True
+        if _nodesource_opt_in():
+            if _install_via_nodesource():
+                return True
+            log_warn("NodeSource setup failed; falling back to distro packages.")
         _run(["apt-get", "update"], use_sudo=True)
         result = _run(["apt-get", "install", "-y", "nodejs", "npm"], use_sudo=True)
         return result.returncode == 0
@@ -305,13 +334,18 @@ def _add_to_windows_user_path(target_dir: Path) -> bool:
             cmd_content = f'@echo off\r\n"{sys.executable}" -m andro_cfw.cli %*\r\n'
             cmd_bin.write_text(cmd_content, encoding="utf-8")
             log_success(f"Created CLI wrapper at '{cmd_bin}'.")
-        except Exception:
+        except Exception:  # noqa: S110 - wrapper is a convenience; PATH edit still proceeds
             pass
 
     target_str = str(target_dir.resolve())
     try:
-        import winreg
-        import ctypes
+        # Imported dynamically: these modules exist only on Windows, so a
+        # static import fails type checking on every other platform.
+        import importlib
+        from typing import Any
+
+        ctypes: Any = importlib.import_module("ctypes")
+        winreg: Any = importlib.import_module("winreg")
 
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
         try:
@@ -356,9 +390,9 @@ def _add_to_posix_user_path(target_dir: Path) -> bool:
         try:
             wrapper_content = f'#!/bin/sh\nexec "{sys.executable}" -m andro_cfw.cli "$@"\n'
             wrapper_bin.write_text(wrapper_content, encoding="utf-8")
-            os.chmod(wrapper_bin, 0o755)
+            os.chmod(wrapper_bin, 0o755)  # noqa: S103 - a launcher on PATH must be executable
             log_success(f"Created CLI wrapper at '{wrapper_bin}'.")
-        except Exception:
+        except Exception:  # noqa: S110 - wrapper is a convenience; PATH edit still proceeds
             pass
 
     target_str = str(target_dir.resolve())

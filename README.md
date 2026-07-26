@@ -28,7 +28,7 @@ Cloudflare's edge network is reachable from restricted regions even when Telegra
 
 - 🔒 **Zero VPN Required** — No VPN needed on your dev machine, server, or during webhook setup.
 - ☁️ **100% Serverless Cloud Bots** — Run real Telegram bots 24/7 directly inside Cloudflare Workers (0 laptop or server required).
-- 🐍 **1-Line Auto-Patcher (`andro_cfw.patch()`)** — Universal auto-detection and patching for `telebot`, `ptb`, `aiogram`, `pyrogram`, and `hydrogram`.
+- 🐍 **1-Line Auto-Patcher (`andro_cfw.patch()`)** — Auto-detects and patches the imported HTTP Bot API framework: `telebot`, `python-telegram-bot`, or `aiogram`. (MTProto clients such as pyrogram/hydrogram/telethon cannot be routed through an HTTP proxy — `patch()` warns instead of failing silently.)
 - 🔀 **Multi-Account Load Balancing** — Pool several Cloudflare accounts' free-tier quotas (100k req/day per account) with automatic failover and daily auto-resets.
 - ⚡ **Snippet & Webhook Generator (`andro-cfw serverless`)** — 1-command deployment of 100% serverless bots with interactive prompts.
 - 🔍 **Live Latency & Health Checks (`andro-cfw check`)** — Test live connection speed and Keep-Alive ping latency across deployed workers.
@@ -60,25 +60,34 @@ You can run your Telegram bot **100% serverless** on Cloudflare Edge with **24/7
 
 ---
 
-### Method A: Zero-Code 1-Command Serverless Bot (`andro-cfw serverless`)
+### Method A: 1-Command Serverless Webhook (`andro-cfw serverless`)
 
-Deploy a fully functional 24/7 serverless bot in under 30 seconds:
+Point Telegram at your worker and relay every update to your own backend:
 
 1. **Run the deployment command**:
    ```bash
-   andro-cfw serverless
+   andro-cfw serverless --forward-url https://your-backend.example.com/telegram
    ```
-2. **Enter your Telegram Bot Token** from `@BotFather` when prompted:
-   ```text
-   [andro-cfw] Enter your Telegram Bot Token from @BotFather: 7123456789:AAFgX...
-   ```
-3. **Done!** `andro-cfw` will deploy the Cloudflare Worker, configure the Webhook, and register it with Telegram automatically — with **zero VPN required**.
+2. **Provide your bot token.** In order of preference:
+   - `TELEGRAM_BOT_TOKEN` in the environment,
+   - the hidden prompt (input is not echoed),
+   - `--token` (least preferred: argv is readable by every process on the machine).
+3. **Done.** `andro-cfw` stores the token as an encrypted Cloudflare Worker
+   secret, generates a fresh webhook secret, and registers the webhook with
+   Telegram — with **zero VPN required**.
 
-#### Built-in Serverless Commands:
-- `/start` or `/help` — Welcome card with edge performance & latency metrics.
-- `/ping` — Responds with `pong 🏓 (< 5ms Edge Latency)`.
-- `/status` — Displays live Cloudflare Worker status & health.
-- `/echo <text>` — Echoes back any text message.
+#### How the webhook is secured
+
+| | |
+|---|---|
+| Bot token | Stored via `wrangler secret put BOT_TOKEN`. Never placed in the webhook URL. |
+| Webhook auth | A 32-byte secret is passed to `setWebhook(secret_token=...)`; Telegram echoes it in `X-Telegram-Bot-Api-Secret-Token` and the worker rejects any update that does not match. |
+| CORS | Off by default. Set `ALLOWED_ORIGINS` only if a browser must call the worker. |
+
+> **Upgrading from v0.3.x?** Earlier releases embedded the bot token in the
+> webhook URL as `?token=...`. That URL is stored by Telegram and replayed on
+> every update. Re-run `andro-cfw serverless` to rotate onto the header-based
+> scheme, and **revoke the old token with @BotFather** — treat it as exposed.
 
 ---
 
@@ -158,7 +167,7 @@ export default {
 
 ### Method C: Python Bot via 1-Line Patcher (`andro_cfw.patch()`)
 
-If you prefer writing your bot logic in Python using `telebot`, `pyrogram`, `aiogram`, or `python-telegram-bot`:
+If you prefer writing your bot logic in Python using `telebot`, `aiogram`, or `python-telegram-bot`:
 
 ```python
 import telebot
@@ -189,12 +198,17 @@ if __name__ == "__main__":
 
 If you have an existing PHP, Node.js, Python, or Go webhook bot hosted on your own server or cPanel, you can use Cloudflare Worker as a **Webhook Filter Bypass**:
 
-1. In your Worker's `wrangler.toml` or Cloudflare Dashboard environment variables, set:
-   ```toml
-   [vars]
-   FORWARD_WEBHOOK_URL = "https://your-server.com/my_bot_webhook.php"
+1. Set the backend URL as a Worker secret (or pass `--forward-url` to
+   `andro-cfw serverless`, which does this for you):
+   ```bash
+   npx wrangler secret put FORWARD_WEBHOOK_URL --name <your-worker-name>
    ```
-2. Whenever Telegram sends a Webhook update to your Cloudflare Worker, Cloudflare automatically strips the network filter and forwards the payload straight to your PHP backend!
+2. Every update Telegram sends to your Worker is forwarded verbatim to your
+   backend, so the network filter never touches your server.
+
+The worker always answers Telegram with `200 OK`, even if your backend is
+down — a non-200 makes Telegram redeliver the same update indefinitely, which
+turns a brief outage into a retry storm.
 
 ---
 
@@ -206,10 +220,9 @@ Generate copy-paste ready starter code for your framework:
 # Print starter snippet for Telebot
 andro-cfw snippet -f telebot
 
-# Generate ready-to-run bot.py for Aiogram / Pyrogram / PTB / Hydrogram
+# Generate ready-to-run bot.py for telebot / PTB / aiogram
 andro-cfw snippet -f aiogram -o bot.py
-andro-cfw snippet -f pyrogram -o bot.py
-andro-cfw snippet -f hydrogram -o bot.py
+andro-cfw snippet -f patch -o bot.py
 andro-cfw snippet -f ptb -o bot.py
 ```
 
@@ -241,7 +254,7 @@ Output example:
 | `andro-cfw init --accounts 3`     | Log into 3 Cloudflare accounts and deploy a load-balanced worker pool. |
 | `andro-cfw serverless`            | Deploy a 100% serverless 24/7 Telegram bot to Cloudflare Edge.        |
 | `andro-cfw add-account`           | Add one more Cloudflare account/worker to an existing session.         |
-| `andro-cfw snippet -f telebot`    | Generate ready-to-run Python code for Telebot, PTB, Aiogram, Pyrogram, or Hydrogram. |
+| `andro-cfw snippet -f telebot`    | Generate ready-to-run Python code for telebot, ptb, aiogram, or the `patch()` one-liner. |
 | `andro-cfw check`                 | Test live network connectivity and ping response times of deployed worker(s). |
 | `andro-cfw status`                | Show the worker(s) saved for this project, and per-account health.     |
 | `andro-cfw setup-path`            | Safely add andro-cfw executable directory to User PATH.                |

@@ -1,14 +1,14 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from andro_cfw.errors import ToolchainMissingError
 from andro_cfw.platform_utils import SystemInfo
 from andro_cfw.toolchain import (
-    _run_version,
-    _node_present,
-    check_node_toolchain,
     _manual_instructions,
+    _node_present,
+    _run_version,
+    check_node_toolchain,
 )
 
 
@@ -79,3 +79,21 @@ def test_manual_instructions():
 
     other_info = SystemInfo("unknown", None, None, None, False, "x86_64")
     assert "nodejs.org" in _manual_instructions(other_info)
+
+
+def test_auto_install_can_be_disabled_by_environment(monkeypatch):
+    """
+    Installing system packages is a privileged, machine-wide side effect. CI
+    and locked-down machines must be able to refuse it.
+    """
+    from andro_cfw import toolchain
+    from andro_cfw.errors import ToolchainMissingError
+
+    monkeypatch.setenv("ANDRO_CFW_NO_AUTO_INSTALL", "1")
+    monkeypatch.setattr(toolchain, "_node_present", lambda: False)
+    called = []
+    monkeypatch.setattr(toolchain, "install_nodejs", lambda info: called.append(info) or True)
+
+    with pytest.raises(ToolchainMissingError):
+        toolchain.check_node_toolchain(auto_install=True)
+    assert called == []

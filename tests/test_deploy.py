@@ -1,9 +1,10 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from andro_cfw.deploy import (
-    _random_worker_name,
     _load_template,
+    _random_worker_name,
     deploy_worker,
     teardown_worker,
 )
@@ -60,6 +61,6 @@ def test_teardown_worker():
          patch("subprocess.run") as mock_run:
         teardown_worker("my-worker", account_label="account-1")
         mock_run.assert_called_once()
-        args, kwargs = mock_run.call_args
+        args, _kwargs = mock_run.call_args
         assert "delete" in args[0]
         assert "my-worker" in args[0]

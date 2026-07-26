@@ -1,8 +1,9 @@
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 
-from andro_cfw.auth import _account_env, cloudflare_login, whoami, ACCOUNTS_DIR
+from andro_cfw.auth import ACCOUNTS_DIR, _account_env, cloudflare_login, whoami
 from andro_cfw.errors import DeploymentError
 
 
@@ -23,7 +24,7 @@ def test_cloudflare_login_success():
         mock_run.return_value = MagicMock(returncode=0)
         cloudflare_login()
         mock_run.assert_called_once()
-        args, kwargs = mock_run.call_args
+        args, _kwargs = mock_run.call_args
         assert args[0] == ["npx", "--yes", "wrangler", "login"]
 
 
@@ -42,3 +43,40 @@ def test_whoami():
         mock_run.return_value = MagicMock(stdout="Logged in as test@example.com", stderr="")
         res = whoami("account-1")
         assert res == "Logged in as test@example.com"
+
+
+def test_account_label_cannot_escape_the_accounts_directory(tmp_path):
+    """
+    The label becomes a directory name under $HOME. A traversing label would
+    let `--name ../../.ssh` point wrangler's OAuth storage anywhere.
+    """
+    from andro_cfw.auth import _account_env
+    from andro_cfw.errors import DeploymentError
+
+    for evil in ("../escape", "a/b", "..", ".", "with space", "~", "acc\x00ount"):
+        with pytest.raises(DeploymentError):
+            _account_env(evil)
+
+
+def test_account_dir_is_owner_only(tmp_path, monkeypatch):
+    """The directory holds live Cloudflare OAuth tokens."""
+    import stat as stat_mod
+
+    from andro_cfw import auth
+
+    monkeypatch.setattr(auth, "ACCOUNTS_DIR", tmp_path / "accounts")
+    env = auth._account_env("account-1")
+
+    account_dir = tmp_path / "accounts" / "account-1"
+    assert env["WRANGLER_HOME"] == str(account_dir)
+    assert env["XDG_CONFIG_HOME"] == str(account_dir)
+    assert stat_mod.S_IMODE(account_dir.stat().st_mode) == 0o700
+    assert stat_mod.S_IMODE((tmp_path / "accounts").stat().st_mode) == 0o700
+
+
+def test_account_env_without_a_label_is_untouched(monkeypatch):
+    from andro_cfw.auth import _account_env
+
+    monkeypatch.setenv("WRANGLER_HOME", "/preexisting")
+    env = _account_env(None)
+    assert env["WRANGLER_HOME"] == "/preexisting"
