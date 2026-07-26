@@ -12,6 +12,9 @@ license = { text = "MIT" }
 authors = [{ name = "andro-cfw contributors" }]
 keywords = ["telegram", "telegram-bot", "cloudflare", "cloudflare-workers", "proxy", "iran", "filter-bypass"]
 classifiers = [
+    # PyPI refuses any upload carrying this classifier. Deliberate: this is a
+    # personal tool, distributed as a wheel on the GitHub release instead.
+    "Private :: Do Not Upload",
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",

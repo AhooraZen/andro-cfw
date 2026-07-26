@@ -34,7 +34,7 @@ Bot C ┘         counts + routes + retries
 ## ✨ Key Features
 
 - 🔒 **Zero VPN Required** — No VPN needed on your dev machine, server, or during webhook setup.
-- 🐍 **Pure Python install** — `pip install andro-cfw` is the whole setup. Deployment speaks to the Cloudflare REST API over HTTPS, so there is no Node.js toolchain, no package manager to invoke, and nothing that asks for `sudo`.
+- 🐍 **Pure Python install** — one `pip install` is the whole setup. Deployment speaks to the Cloudflare REST API over HTTPS, so there is no Node.js toolchain, no package manager to invoke, and nothing that asks for `sudo`.
 - ☁️ **100% Serverless Cloud Bots** — Run real Telegram bots 24/7 directly inside Cloudflare Workers (0 laptop or server required).
 - 🧠 **Shared Proxy Daemon (`andro-cfw daemon`)** — One long-lived local proxy that every bot on the machine shares, instead of one private balancer per bot process.
 - 📈 **Exact Quota Accounting** — The daemon proxies every request, so it counts them and rotates accounts **before** the 100,000/day free-tier limit, not after a 429.
@@ -52,8 +52,13 @@ Bot C ┘         counts + routes + retries
 ```bash
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
-pip install andro-cfw
+pip install git+https://github.com/AhooraZen/andro-cfw.git
 ```
+
+> **Not on PyPI, by design.** This is a personal tool, so it is installed
+> straight from the repository (or from the wheel attached to a GitHub
+> release). `pyproject.toml` carries the `Private :: Do Not Upload` classifier,
+> which PyPI rejects — an accidental publish cannot happen.
 
 That is the entire installation. Nothing else is downloaded, compiled, or installed on your system.
 

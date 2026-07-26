@@ -156,6 +156,15 @@ must re-authenticate; see the migration notes at the end of this entry.
   installation, authentication, the daemon, the dashboard, and a migration
   section for 0.4.x users.
 
+### 📦 Distribution
+
+- **Not published to PyPI, deliberately.** This is a personal tool. Install it
+  from the repository (`pip install git+https://github.com/AhooraZen/andro-cfw.git`)
+  or from the wheel attached to a GitHub release. The release workflow no longer
+  has a PyPI step, and `pyproject.toml` carries the `Private :: Do Not Upload`
+  classifier, which PyPI rejects — so an accidental publish cannot happen even
+  by hand.
+
 ### 🧭 Migrating from 0.4.x
 
 1. Run **`andro-cfw login`** with a token from the "Edit Cloudflare Workers"

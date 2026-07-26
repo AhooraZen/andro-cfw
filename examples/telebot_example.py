@@ -3,7 +3,7 @@ Example: a minimal echo bot using pyTelegramBotAPI (telebot), routed through
 an andro-cfw Cloudflare Worker proxy.
 
 Setup:
-    pip install andro-cfw pyTelegramBotAPI
+    pip install git+https://github.com/AhooraZen/andro-cfw.git pyTelegramBotAPI
     andro-cfw init            # run once, in this same directory
     python telebot_example.py
 """

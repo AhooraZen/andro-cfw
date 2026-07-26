@@ -5,7 +5,7 @@ Import your framework first, then call patch(). It rewrites the imported
 framework's API base URL to point at your Cloudflare Worker.
 
 Setup:
-    pip install andro-cfw pyTelegramBotAPI
+    pip install git+https://github.com/AhooraZen/andro-cfw.git pyTelegramBotAPI
     andro-cfw init            # run once, in this same directory
     python patch_example.py
 """
